@@ -41,7 +41,8 @@ void WallBBoxRegistry::update(const std::vector<BoundingBox>& new_bboxes , const
                   new_bboxes.size(), delta_pose.translation().x(), delta_pose.translation().y(), delta_pose.translation().z());
     
     transform_existing_bboxes(delta_pose);
-    std::vector<bool> matched(registry_.size(), false);
+    const int n_existing = static_cast<int>(registry_.size());
+    std::vector<bool> matched(n_existing, false);
 
     for (const auto& incoming : new_bboxes) {
         if (incoming.get_size() == Eigen::Vector3d::Zero()) continue;
@@ -49,14 +50,14 @@ void WallBBoxRegistry::update(const std::vector<BoundingBox>& new_bboxes , const
         int    best_idx = -1;
         double best_iou  = config_.overlap_threshold;
 
-        for (int i = 0; i < static_cast<int>(registry_.size()); ++i) {
-            
+        for (int i = 0; i < n_existing; ++i) {
+
             // --- [NUOVO] Controlla che le due bbox abbiano la stessa normale
             // La colonna 0 della rotation matrix è la normale al piano
-            const Eigen::Vector3d n_existing = registry_[i].get_rotation().col(0);
+            const Eigen::Vector3d n_reg      = registry_[i].get_rotation().col(0);
             const Eigen::Vector3d n_incoming = incoming.get_rotation().col(0);
-            const double normal_dot = std::abs(n_existing.dot(n_incoming));
-            
+            const double normal_dot = std::abs(n_reg.dot(n_incoming));
+
             // Se le normali sono troppo diverse, non sono lo stesso muro
             if (normal_dot < config_.min_normal_dot) {
                 spdlog::debug("[wall_registry] skip merge: normal mismatch dot={:.3f}", normal_dot);
@@ -81,7 +82,7 @@ void WallBBoxRegistry::update(const std::vector<BoundingBox>& new_bboxes , const
             matched[best_idx]   = true;
             missed_frames_[best_idx] = 0;
             spdlog::debug("[wall_registry] merged bbox {}: IoU={:.3f}", best_idx, best_iou);
-        
+
         } else {
             registry_.push_back(incoming);
             missed_frames_.push_back(0);
@@ -90,7 +91,9 @@ void WallBBoxRegistry::update(const std::vector<BoundingBox>& new_bboxes , const
     }
 
     if (config_.enable_expiry) {
-        for (int i = 0; i < static_cast<int>(registry_.size()); ++i)
+        // Only count missed frames for bboxes that existed at the start of this
+        // update — newly added ones (index >= n_existing) were just seen now.
+        for (int i = 0; i < n_existing; ++i)
             if (!matched[i]) ++missed_frames_[i];
 
         for (int i = static_cast<int>(registry_.size()) - 1; i >= 0; --i) {
