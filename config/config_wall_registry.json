@@ -1,5 +1,5 @@
 {
-    "wall_bbox_registry": {
+    "wall_registry": {
         "overlap_threshold": 0.3,
         "merge_weight": 0.3,
         "enable_expiry": true,
