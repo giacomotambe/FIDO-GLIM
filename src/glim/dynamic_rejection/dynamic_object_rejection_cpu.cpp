@@ -280,14 +280,22 @@ void DynamicObjectRejectionCPU::score_voxels(
 
         if (prev_idx < 0) {
             // No previous match found even after 26-neighbour fallback.
-            // For Tier-1 (confirmed dynamic bbox) this is a genuinely new or
-            // fast-moving voxel — mark dynamic only if a near-dynamic neighbour
-            // exists (propagation will handle the rest); do NOT force it here to
-            // avoid large blobs from a first-frame appearance of a static object
-            // inside a misclassified bbox.
-            // For Tier-2/3 treat as inconclusive (static by default).
-            cur.is_dynamic    = true;
-            cur.dynamic_score = 1.0;
+            // For Tier-1 (confirmed dynamic bbox) the object likely moved fast enough
+            // to leave the search window — mark it dynamic and propagate to neighbours.
+            // For Tier-2/3 treat as inconclusive (static by default) to avoid false
+            // positives from newly-appeared static objects inside misclassified bboxes.
+            if (possibly_dynamic) {
+                cur.is_dynamic    = true;
+                cur.dynamic_score = params_.dynamic_score_threshold + 1.0;
+                const auto nbrs = get_neighbor_voxels(current, cur.mean);
+                std::lock_guard<std::mutex> lock(dyn_mutex);
+                dynamic_voxels.insert(dynamic_voxels.end(), nbrs.size(), j);
+                dynamic_voxels_neighbor_indices_.insert(
+                    dynamic_voxels_neighbor_indices_.end(), nbrs.begin(), nbrs.end());
+            } else {
+                cur.is_dynamic    = false;
+                cur.dynamic_score = 0.0;
+            }
             return;
         }
 
