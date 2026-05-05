@@ -230,7 +230,6 @@ void DynamicObjectRejectionCPU::score_voxels(
             cur.dynamic_score = 0.0;
             return;
         }
-
         cur.is_dynamic    = false;
         cur.dynamic_score = 0.0;
 

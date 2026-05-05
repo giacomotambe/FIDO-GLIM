@@ -21,6 +21,9 @@ public:
     /// Expands the bounding box by `margin` in all directions (adds margin on each side per axis).
     void inflate(double margin);
     double iou(const BoundingBox& other) const;
+    /// Overlap coefficient: intersection / min(vol_a, vol_b).
+    /// Returns 1.0 when the smaller box is fully inside the larger one.
+    double overlap(const BoundingBox& other) const;
     // -----------------------------------------------------------------------
     // Getters (needed by WallBBoxRegistry for IoU / merge operations)
     // -----------------------------------------------------------------------

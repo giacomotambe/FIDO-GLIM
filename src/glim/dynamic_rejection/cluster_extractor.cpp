@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
 #include <unordered_map>
 #include <spdlog/spdlog.h>
 #include <gtsam_points/ann/kdtree.hpp>
@@ -68,8 +69,9 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     history_size               = config.param<int>   ("dynamic_cluster_extractor", "history_size",               5);
     min_static_history_matches = config.param<int>   ("dynamic_cluster_extractor", "min_static_history_matches", 3);
 
-    containment_margin = config.param<double>("dynamic_cluster_extractor", "containment_margin", 0.1);
-    merge_volume_ratio = config.param<double>("dynamic_cluster_extractor", "merge_volume_ratio", 1.5);
+    containment_margin   = config.param<double>("dynamic_cluster_extractor", "containment_margin",   0.1);
+    merge_volume_ratio   = config.param<double>("dynamic_cluster_extractor", "merge_volume_ratio",   1.5);
+    peer_merge_distance  = config.param<double>("dynamic_cluster_extractor", "peer_merge_distance",  0.0);
 
     // --- Tracking params ---
     track_match_distance  = config.param<double>("dynamic_cluster_extractor", "track_match_distance",  1.5);
@@ -163,7 +165,7 @@ static std::vector<BoundingBox> nms3D(
         result.push_back(boxes[ii]);
         for (int j = i + 1; j < N; ++j) {
             const int jj = candidates[j].idx;
-            if (!suppressed[jj] && boxes[ii].iou(boxes[jj]) > iou_threshold)
+            if (!suppressed[jj] && boxes[ii].overlap(boxes[jj]) > iou_threshold)
                 suppressed[jj] = true;
         }
     }
@@ -465,6 +467,32 @@ bool size_compatible(const BoundingBox& a, const BoundingBox& b,
 
 } // anonymous namespace
 
+// Compute the union OBB of two bboxes, keeping a's local frame.
+static BoundingBox compute_union_bbox(const BoundingBox& a, const BoundingBox& b)
+{
+    const Eigen::Matrix3d& R   = a.get_rotation();
+    const Eigen::Vector3d& c_a = a.get_center();
+    const Eigen::Vector3d  he_a = a.get_size() * 0.5;
+
+    const Eigen::Vector3d c_b_local  = R.transpose() * (b.get_center() - c_a);
+    const Eigen::Matrix3d R_b_local  = R.transpose() * b.get_rotation();
+    const Eigen::Vector3d he_b       = b.get_size() * 0.5;
+
+    Eigen::Vector3d lo = -he_a;
+    Eigen::Vector3d hi =  he_a;
+
+    for (int sx : {-1, 1})
+    for (int sy : {-1, 1})
+    for (int sz : {-1, 1}) {
+        const Eigen::Vector3d v = c_b_local +
+            R_b_local * Eigen::Vector3d(sx * he_b.x(), sy * he_b.y(), sz * he_b.z());
+        lo = lo.cwiseMin(v);
+        hi = hi.cwiseMax(v);
+    }
+
+    return BoundingBox(hi - lo, c_a + R * (0.5 * (lo + hi)), R);
+}
+
 // ===========================================================================
 // merge_with_history()
 //
@@ -481,16 +509,60 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_with_history(
     const int N = static_cast<int>(current_bboxes.size());
     if (N == 0) return {};
 
-    std::vector<bool>        absorbed(N, false);
+    // --- Phase 0: peer merging — fonde bbox correnti vicine in bbox più grandi ---
+    // Ordina per volume decrescente: le bbox più grandi assorbono quelle piccole.
+    std::vector<BoundingBox> working(current_bboxes);
+    if (params_.peer_merge_distance > 0.0) {
+        std::vector<int> order(N);
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](int a, int b) {
+            return working[a].get_size().prod() > working[b].get_size().prod();
+        });
+
+        std::vector<bool>        peer_absorbed(N, false);
+        std::vector<Eigen::Vector3d> centers(N);
+        for (int i = 0; i < N; ++i) centers[i] = working[i].get_center();
+
+        const double d2_max = params_.peer_merge_distance * params_.peer_merge_distance;
+
+        for (int ii = 0; ii < N; ++ii) {
+            const int i = order[ii];
+            if (peer_absorbed[i]) continue;
+            for (int jj = ii + 1; jj < N; ++jj) {
+                const int j = order[jj];
+                if (peer_absorbed[j]) continue;
+                if ((centers[i] - centers[j]).squaredNorm() <= d2_max) {
+                    working[i]  = compute_union_bbox(working[i], working[j]);
+                    centers[i]  = working[i].get_center();
+                    peer_absorbed[j] = true;
+                    spdlog::debug("[merge_with_history] peer-merged bbox {} into {}", j, i);
+                }
+            }
+        }
+
+        // Rimuovi le bbox assorbite
+        std::vector<BoundingBox> tmp;
+        tmp.reserve(N);
+        for (int i = 0; i < N; ++i)
+            if (!peer_absorbed[i]) tmp.push_back(working[i]);
+        working = std::move(tmp);
+
+        spdlog::debug("[merge_with_history] peer merge: {} -> {} bboxes",
+                      N, working.size());
+    }
+
+    const int M = static_cast<int>(working.size());
+
+    std::vector<bool>        absorbed(M, false);
     std::vector<BoundingBox> merged_in;
 
     const double margin       = params_.containment_margin;
     const double volume_ratio = params_.merge_volume_ratio;
 
     // OPT-4: pre-compute current centers once.
-    std::vector<Eigen::Vector3d> curr_centers(N);
-    for (int i = 0; i < N; ++i)
-        curr_centers[i] = current_bboxes[i].get_center();
+    std::vector<Eigen::Vector3d> curr_centers(M);
+    for (int i = 0; i < M; ++i)
+        curr_centers[i] = working[i].get_center();
 
     for (const auto& frame_bboxes : history_transformed) {
         for (const auto& hist_bbox : frame_bboxes) {
@@ -505,17 +577,17 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_with_history(
 
             std::vector<int> newly_absorbed_ids;
 
-            for (int i = 0; i < N; ++i) {
+            for (int i = 0; i < M; ++i) {
                 if (absorbed[i]) continue;
 
                 // Never absorb bboxes that belong to established tracks (age > 1).
                 // Replacing a well-tracked cluster with a phantom at its old
                 // history position would give the downstream voxel rejector a
                 // stale, static bbox instead of the actual moved cluster.
-                if (protected_track_ids.count(current_bboxes[i].get_track_id()) > 0)
+                if (protected_track_ids.count(working[i].get_track_id()) > 0)
                     continue;
 
-                const Eigen::Vector3d& cs       = current_bboxes[i].get_size();
+                const Eigen::Vector3d& cs       = working[i].get_size();
                 const double           curr_vol = cs.x() * cs.y() * cs.z();
 
                 if (hist_vol < volume_ratio * curr_vol) continue;
@@ -545,9 +617,9 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_with_history(
     }
 
     std::vector<BoundingBox> result;
-    result.reserve(N + static_cast<int>(merged_in.size()));
-    for (int i = 0; i < N; ++i)
-        if (!absorbed[i]) result.push_back(current_bboxes[i]);
+    result.reserve(M + static_cast<int>(merged_in.size()));
+    for (int i = 0; i < M; ++i)
+        if (!absorbed[i]) result.push_back(working[i]);
     result.insert(result.end(), merged_in.begin(), merged_in.end());
 
     const int n_absorbed = static_cast<int>(
@@ -581,8 +653,8 @@ void DynamicClusterExtractor::update_tracks(
     }
 
     // 2/3. Predict and build candidate pairs.
-    // Fix-1: accept if dist < D_strict (no IoU needed)
-    //        OR   dist < D_loose AND IoU > iou_low
+    // Fix-1: accept if dist < D_strict (no overlap needed)
+    //        OR   dist < D_loose AND overlap > overlap_low
     struct Pair { int t_idx, b_idx; double dist; };
     std::vector<Pair> pairs;
     pairs.reserve(std::min(static_cast<size_t>(N_tracks) * 4u,
@@ -592,7 +664,7 @@ void DynamicClusterExtractor::update_tracks(
     const double D_strict = params_.track_match_distance_strict * dist_scale;
     const double D_loose2  = D_loose  * D_loose;
     const double D_strict2 = D_strict * D_strict;
-    const double iou_low   = params_.track_match_iou * 0.4;
+    const double overlap_low = params_.track_match_iou * 0.4;
 
     for (int t = 0; t < N_tracks; ++t) {
         const Eigen::Vector3d predicted = tracks_[t].center + tracks_[t].velocity;
@@ -608,8 +680,8 @@ void DynamicClusterExtractor::update_tracks(
                 continue;
             }
 
-            const double iou_val = tracks_[t].last_bbox.iou(bboxes[b]);
-            if (iou_val >= iou_low)
+            const double overlap_val = tracks_[t].last_bbox.overlap(bboxes[b]);
+            if (overlap_val >= overlap_low)
                 pairs.push_back({t, b, std::sqrt(d2)});
         }
     }
@@ -659,7 +731,7 @@ void DynamicClusterExtractor::update_tracks(
         t.velocity      = Eigen::Vector3d::Zero();
         t.age           = 1;
         t.missed_frames = 0;
-        t.dynamic_score = 1.0;   // new tracks start uncertain (dynamic until proven static)
+        t.dynamic_score = 0.5;   // new tracks start neutral; EMA converges during age guard
         t.is_dynamic    = true;
         t.slow_frames   = 0;
 
@@ -735,7 +807,7 @@ void DynamicClusterExtractor::classify_clusters(
         if (t.age > 1) protected_track_ids.insert(t.id);
 
     // Step 3: temporal merge (protects established tracks).
-    //cluster_bboxes = merge_with_history(cluster_bboxes, history_transformed, protected_track_ids);
+    cluster_bboxes = merge_with_history(cluster_bboxes, history_transformed, protected_track_ids);
 
     // OPT-3: build track lookup map once for O(1) access in the classification loop.
     std::unordered_map<int, Track*> track_map;
@@ -751,17 +823,17 @@ void DynamicClusterExtractor::classify_clusters(
     const double center_tol2       = center_tol * center_tol;
     const int available_history = static_cast<int>(history_transformed.size());
 
-    // Steps 4+5: combined IoU-ratio + velocity-zone + EMA classification.
+    // Steps 4+5: combined overlap-ratio + velocity-zone + EMA classification.
     //
     // For each tracked bbox:
-    //   4.  Count IoU matches across all history frames → static_ratio.
+    //   4.  Count overlap matches across all history frames → static_ratio.
     //       (No early break: we need the full count for a meaningful ratio.)
     //   5a. Velocity zone:
     //         < velocity_static_threshold  → static evidence (accumulate slow_frames)
     //         > velocity_dynamic_threshold → dynamic evidence (reset slow_frames)
     //         in between                   → intermediate (decay slow_frames by 1)
     //   5b. EMA update:  score = (1-α)*score + α*observation
-    //       where observation = 0.5*iou_obs + 0.5*vel_obs  (0=static, 1=dynamic)
+    //       where observation = 0.5*overlap_obs + 0.5*vel_obs  (0=static, 1=dynamic)
     //   Age guard: tracks younger than min_track_age are forced DYNAMIC (uncertain).
     for (auto& cluster : cluster_bboxes) {
         const int tid = cluster.get_track_id();
@@ -774,61 +846,79 @@ void DynamicClusterExtractor::classify_clusters(
         }
         Track& t = *it->second;
 
-        // --- Age guard: young tracks are unreliable, keep them dynamic ---
-        if (t.age < params_.min_track_age) {
-            cluster.set_dynamic(true);
-            spdlog::debug("[classifier] track={} age={} < min_track_age={} -> UNCERTAIN/DYNAMIC",
-                          t.id, t.age, params_.min_track_age);
-            continue;
-        }
-
-        // --- Step 4: IoU history ratio (OPT-5 + Fix-5 relaxed center fallback) ---
+        // --- Step 4: overlap history ratio ---
+        // Continuous: overlap_obs = 1.0 - static_ratio (0=fully static, 1=fully dynamic).
+        // When history is too short to be meaningful, use a neutral 0.5.
         int static_matches = 0;
         const Eigen::Vector3d& cc = cluster.get_center();
         for (const auto& frame_bboxes : history_transformed) {
             for (const auto& hist_bbox : frame_bboxes) {
                 const double d2_h = (cc - hist_bbox.get_center()).squaredNorm();
                 if (d2_h > dist_thresh2) continue;
-                // Fix-5: accept if IoU > threshold OR center within small tolerance.
-                if (cluster.iou(hist_bbox) > params_.cluster_iou_threshold ||
+                if (cluster.overlap(hist_bbox) > params_.cluster_iou_threshold ||
                     d2_h < center_tol2) {
                     ++static_matches;
                     break;
                 }
             }
         }
-        const double static_ratio  = available_history > 0
-            ? static_cast<double>(static_matches) / available_history : 0.0;
-        const double iou_obs = (static_ratio >= params_.static_history_ratio) ? 0.0 : 1.0;
+        double overlap_obs;
+        if (available_history < params_.min_track_age) {
+            // Not enough history to draw conclusions — neutral evidence.
+            overlap_obs = 0.5;
+        } else {
+            const double static_ratio = static_cast<double>(static_matches) / available_history;
+            overlap_obs = 1.0 - static_ratio;  // continuous: 0=static, 1=dynamic
+        }
 
         // --- Step 5a: velocity zones ---
         const double speed = t.velocity.norm();
         double vel_obs;
         if (speed < params_.velocity_static_threshold) {
             ++t.slow_frames;
-            vel_obs = 0.0;  // static evidence
+            vel_obs = 0.0;
         } else if (speed > params_.velocity_dynamic_threshold) {
             t.slow_frames = 0;
-            vel_obs = 1.0;  // dynamic evidence
+            vel_obs = 1.0;
         } else {
-            // Intermediate zone: gradual decay — do not hard-reset slow_frames.
             if (t.slow_frames > 0) --t.slow_frames;
             vel_obs = (speed - params_.velocity_static_threshold) /
                       (params_.velocity_dynamic_threshold - params_.velocity_static_threshold);
         }
 
-        // --- Step 5b: EMA update and final decision ---
-        const double observation = 0.5 * iou_obs + 0.5 * vel_obs;
+        // --- Step 5b: EMA update ---
+        // Always update score so it converges even during the age-guard period.
+        const double observation = 0.5 * overlap_obs + 0.5 * vel_obs;
         t.dynamic_score = (1.0 - params_.ema_alpha) * t.dynamic_score
                         + params_.ema_alpha * observation;
+
+        // --- Age guard: young tracks output dynamic but EMA already advanced ---
+        if (t.age < params_.min_track_age) {
+            cluster.set_dynamic(true);
+            spdlog::debug("[classifier] track={} age={} < min_track_age={} score={:.3f} -> UNCERTAIN/DYNAMIC",
+                          t.id, t.age, params_.min_track_age, t.dynamic_score);
+            continue;
+        }
+
+        // --- Velocity-based hard static override ---
+        // If the track has been consistently slow, force static regardless of score.
+        if (t.slow_frames >= params_.velocity_static_frames) {
+            t.dynamic_score *= (1.0 - params_.ema_alpha);  // decay toward 0
+            t.is_dynamic = false;
+            cluster.set_dynamic(false);
+            spdlog::debug("[classifier] track={} slow_frames={}>={} -> FORCED STATIC score={:.3f}",
+                          t.id, t.slow_frames, params_.velocity_static_frames, t.dynamic_score);
+            continue;
+        }
+
+        // --- Final EMA decision ---
         t.is_dynamic = (t.dynamic_score >= params_.dynamic_score_threshold);
         cluster.set_dynamic(t.is_dynamic);
 
         spdlog::debug("[classifier] track={} age={} speed={:.3f} slow_f={} "
-                      "iou_obs={:.2f}(ratio={:.2f}) vel_obs={:.2f} "
-                      "score={:.3f} -> {}",
+                      "overlap_obs={:.2f} vel_obs={:.2f} score={:.3f} -> {}",
                       t.id, t.age, speed, t.slow_frames,
-                      iou_obs, static_ratio, vel_obs,
+                      overlap_obs, vel_obs,
                       t.dynamic_score,
                       t.is_dynamic ? "DYN" : "STA");
     }

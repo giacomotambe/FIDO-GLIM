@@ -88,4 +88,20 @@ double BoundingBox::iou(const BoundingBox& other) const {
     return vol_inter / (vol_a + vol_b - vol_inter + 1e-9);
 }
 
+double BoundingBox::overlap(const BoundingBox& other) const {
+    const Eigen::Vector3d inter_min = (center - half_size).cwiseMax(other.center - other.half_size);
+    const Eigen::Vector3d inter_max = (center + half_size).cwiseMin(other.center + other.half_size);
+    const Eigen::Vector3d inter_size = (inter_max - inter_min).cwiseMax(Eigen::Vector3d::Zero());
+
+    const double vol_inter = inter_size.x() * inter_size.y() * inter_size.z();
+    if (vol_inter <= 0.0) return 0.0;
+
+    const double vol_a = (2.0 * half_size).prod();
+    const double vol_b = (2.0 * other.half_size).prod();
+    const double vol_min = std::min(vol_a, vol_b);
+    if (vol_min <= 1e-9) return 0.0;
+
+    return vol_inter / vol_min;
+}
+
 }  // namespace glim

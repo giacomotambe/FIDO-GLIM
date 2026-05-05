@@ -24,6 +24,8 @@
     "_comment_containment": "=== Containment-based bbox merging ===",
     "containment_margin": 0.2,
     "merge_volume_ratio": 1.5,
+    "_comment_peer_merge": "=== Peer merging: fonde bbox vicine in una sola più grande. 0=disabilitato ===",
+    "peer_merge_distance": 0.0,
 
     "_comment_tracking": "=== Cluster tracking ===",
     "track_match_distance":        1.5,

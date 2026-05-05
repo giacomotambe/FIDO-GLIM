@@ -101,6 +101,11 @@ public:
     double containment_margin;  // default 0.1m
     double merge_volume_ratio;  // default 1.5
 
+    /// Max center-to-center distance [m] for merging two current-frame bboxes
+    /// into a single larger one.  Set to 0.0 to disable peer merging.
+    /// Default: 0.0
+    double peer_merge_distance;
+
     // --- Cluster tracking ---
 
     /// Max center distance (predicted) to associate a bbox to a track [m].
