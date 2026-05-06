@@ -39,7 +39,9 @@ public:
     // Cluster propagation
     double cluster_propagation_threshold;
     // Motion-adaptive threshold
-    double motion_threshold_scale;  ///< Threshold multiplier per meter of robot translation. Higher = less sensitive while moving.
+    double motion_threshold_scale;      ///< Threshold multiplier per meter of robot translation. Higher = less sensitive while moving.
+    double min_shift_m;                 ///< Dead zone: centroid shifts below this value [m] contribute 0 to the score. Absorbs voxel-grid quantization artifacts.
+    double cluster_motion_scale;        ///< Scales cluster_propagation_threshold by motion_scale_^cluster_motion_scale. Higher = harder to trigger a cluster during movement.
     // Misc
     int num_threads;
 };

@@ -57,6 +57,8 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     points_limit                  = config.param<double>("dynamic_object_rejection", "points_limit",                  0.25);
     cluster_propagation_threshold = config.param<double>("dynamic_object_rejection", "cluster_propagation_threshold", 0.5);
     motion_threshold_scale        = config.param<double>("dynamic_object_rejection", "motion_threshold_scale",        0.5);
+    min_shift_m                   = config.param<double>("dynamic_object_rejection", "min_shift_m",                   0.10);
+    cluster_motion_scale          = config.param<double>("dynamic_object_rejection", "cluster_motion_scale",          1.0);
 
     spdlog::debug("[dynamic_rejection] params loaded");
 }
@@ -315,9 +317,11 @@ void DynamicObjectRejectionCPU::score_voxels(
         // object has stopped moving.
         const bool was_recently_dynamic = prv.is_dynamic;
 
-        // ---- 1. Centroid shift (normalised by voxel size) ----
+        // ---- 1. Centroid shift (normalised by voxel size, with dead zone) ----
+        // Subtract min_shift_m before normalising: shifts below this value contribute
+        // nothing to the score, absorbing voxel-grid quantization artifacts (≤ 0.5 * voxel_res).
         const Eigen::Vector3d delta = p_trans - prv.mean.head<3>();
-        const double shift = delta.norm() * inv_res;
+        const double shift = std::max(0.0, delta.norm() - params_.min_shift_m) * inv_res;
 
         // ---- 2. Mahalanobis distance ----
         double mahal = 0.0;
@@ -473,14 +477,19 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     // Determine which clusters are dynamic this frame.
     // Always set is_dynamic explicitly (true or false) so update_dynamic_feedback()
     // receives a clean signal and the hysteresis counter can reset correctly.
+    // Scale the propagation threshold by motion_scale_^cluster_motion_scale so that
+    // a larger fraction of a cluster's voxels must score dynamic during robot movement.
+    const double eff_prop_threshold =
+        params_.cluster_propagation_threshold * std::pow(motion_scale_, params_.cluster_motion_scale);
+
     std::vector<bool> cluster_is_dynamic(n_clusters, false);
     for (int c = 0; c < n_clusters; ++c) {
         if (total_count[c] == 0) continue;
         const double ratio = static_cast<double>(dynamic_count[c]) / total_count[c];
-        cluster_is_dynamic[c] = (ratio > params_.cluster_propagation_threshold);
+        cluster_is_dynamic[c] = (ratio > eff_prop_threshold);
         cluster_bboxes[c].set_dynamic(cluster_is_dynamic[c]);
-        spdlog::debug("[dynamic_rejection] cluster {}: {}/{} dynamic ({:.1f}%) -> {}",
-                      c, dynamic_count[c], total_count[c], ratio * 100.0,
+        spdlog::debug("[dynamic_rejection] cluster {}: {}/{} dynamic ({:.1f}%) threshold={:.2f} -> {}",
+                      c, dynamic_count[c], total_count[c], ratio * 100.0, eff_prop_threshold,
                       cluster_is_dynamic[c] ? "DYNAMIC" : "static");
     }
 

@@ -481,8 +481,11 @@ void DynamicClusterExtractor::update_tracks(
     const int N_bboxes = static_cast<int>(bboxes.size());
 
     // Transform track centers into current sensor frame.
-    for (auto& t : tracks_)
+    for (auto& t : tracks_){
         t.center = T_to_current * t.center;
+        t.last_bbox.transform(T_to_current);
+    }
+        
 
     // Build candidate pairs gated by distance, ranked by overlap.
     struct Pair { int t_idx, b_idx; double overlap; };
