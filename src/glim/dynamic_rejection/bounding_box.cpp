@@ -22,7 +22,7 @@ BoundingBox::BoundingBox(const Eigen::Vector3d& size,
     : size(size),
       center(center),
       rotation(rotation),
-      is_dynamic(true),  // default to dynamic, can be set later
+      is_dynamic(false),  // default to static, can be set later
       track_id(-1)
 {
     // Precompute values used in contains()

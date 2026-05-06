@@ -31,6 +31,7 @@ public:
     double w_neighbor;
     double w_cluster;
     double w_history;
+    double w_history_dynamic;  ///< Score bonus per history frame in which the voxel was dynamic.
     double points_limit;
     // History
     double history_factor;
@@ -111,7 +112,7 @@ public:
     DynamicRejectionResult reject(
         const WallFilterResult&       wf_result,
         const PreprocessedFrame::Ptr& source_frame,
-        const std::vector<BoundingBox>& cluster_bboxes = std::vector<BoundingBox>());
+        std::vector<BoundingBox>& cluster_bboxes);
 
     // -----------------------------------------------------------------------
     // Accessors
@@ -146,7 +147,7 @@ private:
     
     /// If a percentage of voxels in a cluster are dynamic, mark the whole cluster as dynamic.
     void propagate_to_clusters(
-        gtsam_points::DynamicVoxelMapCPU& voxelmap, const std::vector<BoundingBox>& cluster_bboxes);   
+        gtsam_points::DynamicVoxelMapCPU& voxelmap, std::vector<BoundingBox>& cluster_bboxes);   
 
     /// Iterate all voxels and append their raw points to the appropriate bucket.
     void collect_points(

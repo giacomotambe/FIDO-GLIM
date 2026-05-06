@@ -167,9 +167,6 @@ void AsyncDynamicObjectRejection::run() {
             wall_result_queue.push_back(wf);
             output_frame_queue.push_back(dr.static_frame);
             cluster_bbox_queue_.push_back(cluster_bboxes);
-            if (cluster_extractor_) {
-                cluster_history_queue_.push_back(cluster_extractor_->get_cluster_history_snapshot());
-            }
             if (dr.dynamic_frame) {
                 dynamic_frame_queue.push_back(dr.dynamic_frame);
             }

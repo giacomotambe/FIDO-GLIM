@@ -89,7 +89,7 @@ DynamicObjectRejectionCPU::DynamicObjectRejectionCPU(
 DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     const WallFilterResult&       wf_result,
     const PreprocessedFrame::Ptr& source_frame,
-    const std::vector<BoundingBox>& cluster_bboxes)
+    std::vector<BoundingBox>& cluster_bboxes)
 {
     spdlog::debug("[dynamic_rejection] reject begin: voxelmap={} wall_voxels={}/{}",
         static_cast<bool>(wf_result.voxelmap),
@@ -284,6 +284,7 @@ void DynamicObjectRejectionCPU::score_voxels(
             // For Tier-2/3 treat as inconclusive (static by default) to avoid false
             // positives from newly-appeared static objects inside misclassified bboxes.
             if (possibly_dynamic) {
+                spdlog::debug("Voxel at ({}, {}, {}) is possibly dynamic.", cur.mean.x(), cur.mean.y(), cur.mean.z());
                 cur.is_dynamic    = true;
                 cur.dynamic_score = params_.dynamic_score_threshold + 1.0;
                 const auto nbrs = get_neighbor_voxels(current, cur.mean);
@@ -440,7 +441,7 @@ void DynamicObjectRejectionCPU::propagate_to_neighbors(
 
 void DynamicObjectRejectionCPU::propagate_to_clusters(
     gtsam_points::DynamicVoxelMapCPU& voxelmap,
-    const std::vector<BoundingBox>& cluster_bboxes)
+    std::vector<BoundingBox>& cluster_bboxes)
 {
     if (cluster_bboxes.empty()) return;
 
@@ -472,7 +473,6 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     bool any_dynamic = false;
     for (int c = 0; c < n_clusters; ++c) {
         if (total_count[c] == 0) continue;
-        if (!cluster_bboxes[c].is_dynamic_bbox()) continue;  // static bbox — never propagate
         const double ratio = static_cast<double>(dynamic_count[c]) / total_count[c];
         cluster_is_dynamic[c] = (ratio > params_.cluster_propagation_threshold);
         if (cluster_is_dynamic[c]) any_dynamic = true;
