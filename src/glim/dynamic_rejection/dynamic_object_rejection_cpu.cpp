@@ -475,20 +475,32 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         if (total_count[c] == 0) continue;
         const double ratio = static_cast<double>(dynamic_count[c]) / total_count[c];
         cluster_is_dynamic[c] = (ratio > params_.cluster_propagation_threshold);
-        if (cluster_is_dynamic[c]) any_dynamic = true;
+        if (cluster_is_dynamic[c]) 
+        {
+            any_dynamic = true;
+            cluster_bboxes[c].set_dynamic(true);
+        }
         spdlog::debug("[dynamic_rejection] cluster {}: {}/{} dynamic ({:.1f}%) -> {}",
                       c, dynamic_count[c], total_count[c], ratio * 100.0,
                       cluster_is_dynamic[c] ? "DYNAMIC" : "static");
     }
 
-    if (!any_dynamic) return;
+    //if (!any_dynamic) return;
 
     for (int j = 0; j < nvox; ++j) {
         const int c = voxel_cluster[j];
-        if (c < 0 || !cluster_is_dynamic[c]) continue;
         auto& v = voxelmap.lookup_voxel(j);
+        
+        
         if (!v.is_wall) {
-            v.is_dynamic = true;
+            if (c < 0) {
+                v.is_dynamic = false;  // outside all clusters → static
+                continue;
+            } else if (cluster_bboxes[c].is_dynamic_bbox()) {
+                v.is_dynamic = true;
+            } else {
+                v.is_dynamic = false;
+            }
         }
     }
 }

@@ -510,11 +510,12 @@ void DynamicClusterExtractor::update_tracks(
 
         Track& t        = tracks_[p.t_idx];
         t.center        = bboxes[p.b_idx].get_center();
+        bboxes[p.b_idx].set_dynamic(t.last_bbox.is_dynamic_bbox());  // Mark matched tracks as dynamic for downstream use.
         t.last_bbox     = bboxes[p.b_idx];
         t.missed_frames = 0;
         t.age++;
         bboxes[p.b_idx].set_track_id(t.id);
-
+       
         spdlog::debug("[tracker] matched track={} age={} overlap={:.3f} center=({:.2f},{:.2f},{:.2f})",
                       t.id, t.age, p.overlap,
                       t.center.x(), t.center.y(), t.center.z());
@@ -531,6 +532,7 @@ void DynamicClusterExtractor::update_tracks(
         t.missed_frames = 0;
         tracks_.push_back(t);
         bboxes[b].set_track_id(t.id);
+        bboxes[b].set_dynamic(false);  // Mark tracks as dynamic for downstream use.
         spdlog::debug("[tracker] new track={} at ({:.2f},{:.2f},{:.2f})",
                       t.id, t.center.x(), t.center.y(), t.center.z());
     }
