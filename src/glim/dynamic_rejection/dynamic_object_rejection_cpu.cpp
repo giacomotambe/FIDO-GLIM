@@ -56,6 +56,7 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     frame_num_memory              = config.param<int>   ("dynamic_object_rejection", "frame_num_memory",              10);
     points_limit                  = config.param<double>("dynamic_object_rejection", "points_limit",                  0.25);
     cluster_propagation_threshold = config.param<double>("dynamic_object_rejection", "cluster_propagation_threshold", 0.5);
+    motion_threshold_scale        = config.param<double>("dynamic_object_rejection", "motion_threshold_scale",        0.5);
 
     spdlog::debug("[dynamic_rejection] params loaded");
 }
@@ -117,8 +118,12 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     Eigen::Isometry3d T_delta_pose = cur_pose * last_pose_.inverse();
     last_pose_ = cur_pose;
 
-    spdlog::debug("[dynamic_rejection] delta pose since last frame: translation=({:.4f},{:.4f},{:.4f})",
-        T_delta_pose.translation().x(), T_delta_pose.translation().y(), T_delta_pose.translation().z());
+    const double robot_translation = T_delta_pose.translation().norm();
+    motion_scale_ = 1.0 + params_.motion_threshold_scale * robot_translation;
+
+    spdlog::debug("[dynamic_rejection] delta pose since last frame: translation=({:.4f},{:.4f},{:.4f}) motion_scale={:.3f}",
+        T_delta_pose.translation().x(), T_delta_pose.translation().y(), T_delta_pose.translation().z(),
+        motion_scale_);
 
     // -----------------------------------------------------------------------
     // Score voxels against previous frame, then propagate to neighbours
@@ -374,13 +379,14 @@ void DynamicObjectRejectionCPU::score_voxels(
         //  Tier 3 — isolated voxel, no cluster, no recent dynamic history:
         //           uses base_threshold * unconstrained_factor (high).
         //           Only very large shifts pass → suppresses lidar/odometry noise.
+        const double base_threshold = params_.dynamic_score_threshold * motion_scale_;
         double eff_threshold;
         if (possibly_dynamic) {
-            eff_threshold = params_.dynamic_score_threshold * params_.tier1_threshold_factor;
+            eff_threshold = base_threshold * params_.tier1_threshold_factor;
         } else if (was_recently_dynamic) {
-            eff_threshold = params_.dynamic_score_threshold * params_.memory_threshold_factor;
+            eff_threshold = base_threshold * params_.memory_threshold_factor;
         } else {
-            eff_threshold = params_.dynamic_score_threshold * params_.unconstrained_threshold_factor;
+            eff_threshold = base_threshold * params_.unconstrained_threshold_factor;
         }
 
         if (cur.dynamic_score > eff_threshold) {
@@ -425,7 +431,7 @@ void DynamicObjectRejectionCPU::propagate_to_neighbors(
         if (v.is_dynamic || v.is_wall) continue;
 
         v.dynamic_score += params_.w_neighbor;
-        if (v.dynamic_score > params_.dynamic_score_threshold) {
+        if (v.dynamic_score > params_.dynamic_score_threshold * motion_scale_) {
             v.is_dynamic = true;
         }
     }
@@ -464,28 +470,19 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         }
     }
 
-    // Determine which clusters flip to dynamic.
-    // Only consider clusters whose bbox is CONFIRMED dynamic by the cluster
-    // extractor.  Without this gate, a single odometry spike can push 30%+
-    // of a static cluster's voxels over the shift threshold, causing the
-    // entire cluster to be marked dynamic for that frame.
+    // Determine which clusters are dynamic this frame.
+    // Always set is_dynamic explicitly (true or false) so update_dynamic_feedback()
+    // receives a clean signal and the hysteresis counter can reset correctly.
     std::vector<bool> cluster_is_dynamic(n_clusters, false);
-    bool any_dynamic = false;
     for (int c = 0; c < n_clusters; ++c) {
         if (total_count[c] == 0) continue;
         const double ratio = static_cast<double>(dynamic_count[c]) / total_count[c];
         cluster_is_dynamic[c] = (ratio > params_.cluster_propagation_threshold);
-        if (cluster_is_dynamic[c]) 
-        {
-            any_dynamic = true;
-            cluster_bboxes[c].set_dynamic(true);
-        }
+        cluster_bboxes[c].set_dynamic(cluster_is_dynamic[c]);
         spdlog::debug("[dynamic_rejection] cluster {}: {}/{} dynamic ({:.1f}%) -> {}",
                       c, dynamic_count[c], total_count[c], ratio * 100.0,
                       cluster_is_dynamic[c] ? "DYNAMIC" : "static");
     }
-
-    //if (!any_dynamic) return;
 
     for (int j = 0; j < nvox; ++j) {
         const int c = voxel_cluster[j];

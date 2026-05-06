@@ -38,6 +38,8 @@ public:
     int    frame_num_memory;
     // Cluster propagation
     double cluster_propagation_threshold;
+    // Motion-adaptive threshold
+    double motion_threshold_scale;  ///< Threshold multiplier per meter of robot translation. Higher = less sensitive while moving.
     // Misc
     int num_threads;
 };
@@ -199,6 +201,8 @@ private:
     Eigen::Isometry3d last_pose_;
 
     std::vector<BoundingBox> last_cluster_bboxes_;
+
+    double motion_scale_ = 1.0;  ///< Current-frame motion scale factor, updated in reject().
 };
 
 }  // namespace glim

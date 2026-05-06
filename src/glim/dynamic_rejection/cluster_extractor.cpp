@@ -49,18 +49,21 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     track_match_distance = config.param<double>("dynamic_cluster_extractor", "track_match_distance", 1.5);
     track_match_iou      = config.param<double>("dynamic_cluster_extractor", "track_match_iou",      0.3);
     track_max_missed     = config.param<int>   ("dynamic_cluster_extractor", "track_max_missed",     3);
+    min_dynamic_frames   = config.param<int>   ("dynamic_cluster_extractor", "min_dynamic_frames",   3);
 
     spdlog::debug("[cluster_extractor] eps_factor={:.2f} min_pts={} knn_max={} "
                   "min_cluster_voxels={} min_points_bbox={} "
                   "bbox_extent=[{:.2f},{:.2f}] bbox_volume=[{:.3f},{:.3f}] "
                   "cluster_iou_threshold={:.2f} peer_merge_distance={:.2f} "
-                  "track_match_distance={:.2f} track_match_iou={:.2f} track_max_missed={}",
+                  "track_match_distance={:.2f} track_match_iou={:.2f} track_max_missed={} "
+                  "min_dynamic_frames={}",
                   eps_voxel_factor, min_pts, knn_max_neighbors,
                   min_cluster_voxels, min_points_for_bbox,
                   bbox_min_extent, bbox_max_extent,
                   bbox_min_volume, bbox_max_volume,
                   cluster_iou_threshold, peer_merge_distance,
-                  track_match_distance, track_match_iou, track_max_missed);
+                  track_match_distance, track_match_iou, track_max_missed,
+                  min_dynamic_frames);
 }
 
 DynamicClusterExtractorParams::~DynamicClusterExtractorParams() = default;
@@ -510,7 +513,9 @@ void DynamicClusterExtractor::update_tracks(
 
         Track& t        = tracks_[p.t_idx];
         t.center        = bboxes[p.b_idx].get_center();
-        bboxes[p.b_idx].set_dynamic(t.last_bbox.is_dynamic_bbox());  // Mark matched tracks as dynamic for downstream use.
+        // Gate is_dynamic on the hysteresis counter updated by update_dynamic_feedback().
+        // A bbox is flagged dynamic only after min_dynamic_frames consecutive confirmations.
+        bboxes[p.b_idx].set_dynamic(t.dynamic_frames >= params_.min_dynamic_frames);
         t.last_bbox     = bboxes[p.b_idx];
         t.missed_frames = 0;
         t.age++;
@@ -549,6 +554,33 @@ void DynamicClusterExtractor::update_tracks(
         tracks_.end());
 
     spdlog::debug("[tracker] active_tracks={}", tracks_.size());
+}
+
+// ===========================================================================
+// update_dynamic_feedback()
+//
+// Must be called after reject() each frame.  Matches post-rejection bboxes to
+// tracks by track_id and updates the dynamic_frames hysteresis counter:
+//   - bbox confirmed dynamic  → increment counter
+//   - bbox not dynamic / not found → reset counter to 0
+// ===========================================================================
+
+void DynamicClusterExtractor::update_dynamic_feedback(
+    const std::vector<BoundingBox>& post_rejection_bboxes)
+{
+    for (auto& track : tracks_) {
+        bool found = false;
+        for (const auto& bbox : post_rejection_bboxes) {
+            if (bbox.get_track_id() != track.id) continue;
+            track.dynamic_frames = bbox.is_dynamic_bbox() ? track.dynamic_frames + 1 : 0;
+            found = true;
+            break;
+        }
+        if (!found) {
+            track.dynamic_frames = 0;
+        }
+        spdlog::debug("[tracker] track={} dynamic_frames={}", track.id, track.dynamic_frames);
+    }
 }
 
 } // namespace glim

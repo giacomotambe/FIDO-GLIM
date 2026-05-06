@@ -108,6 +108,11 @@ void AsyncDynamicObjectRejection::run() {
             const DynamicRejectionResult dr =
                 dynamic_rejection_->reject(wf, frame, cluster_bboxes);
 
+            // Feed propagate_to_clusters() results back to the tracker so the
+            // hysteresis counter (dynamic_frames) reflects confirmed dynamic detections.
+            if (cluster_extractor_) {
+                cluster_extractor_->update_dynamic_feedback(cluster_bboxes);
+            }
 
             spdlog::debug("[PERF] reject           {:.1f} ms", T(t_reject));
 

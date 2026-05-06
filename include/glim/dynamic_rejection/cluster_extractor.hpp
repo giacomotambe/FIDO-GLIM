@@ -23,6 +23,7 @@ struct Track {
     BoundingBox     last_bbox;    ///< Last matched bbox (for overlap gating)
     int             age;
     int             missed_frames;
+    int             dynamic_frames = 0;  ///< Consecutive frames confirmed dynamic by propagate_to_clusters()
 };
 
 // ===========================================================================
@@ -59,6 +60,7 @@ public:
     double track_match_distance; ///< Max center distance for track association [m]. Default: 1.5
     double track_match_iou;      ///< Min overlap for track association. Default: 0.3
     int    track_max_missed;     ///< Frames without match before track deletion. Default: 3
+    int    min_dynamic_frames;   ///< Consecutive confirmed-dynamic frames before bbox is flagged as dynamic. Default: 3
 };
 
 // ===========================================================================
@@ -99,6 +101,11 @@ private:
 
     /// Match bboxes to tracks by overlap, assign IDs, create/prune tracks.
     void update_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current);
+
+public:
+    /// Called after reject() to feed propagate_to_clusters() results back into track dynamic counters.
+    /// Increments dynamic_frames for tracks whose bbox was confirmed dynamic; resets to 0 otherwise.
+    void update_dynamic_feedback(const std::vector<BoundingBox>& post_rejection_bboxes);
 
 private:
     DynamicClusterExtractorParams     params_;
