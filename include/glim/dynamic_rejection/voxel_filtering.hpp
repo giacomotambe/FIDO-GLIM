@@ -65,6 +65,8 @@ struct WallFilterConfig {
     double floor_polar_seed_max_r;
     double floor_polar_height_margin;
     int    floor_polar_k_lowest;
+    double floor_polar_flatness_threshold;
+    double floor_polar_max_ground_height;
     double floor_polar_max_vertical_spread;
 
     Eigen::Isometry3d T_lidar_imu;

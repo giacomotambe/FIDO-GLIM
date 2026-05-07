@@ -43,6 +43,8 @@ WallFilterConfig::WallFilterConfig() {
     floor_polar_seed_max_r      = config.param<double>("wall_filter", "floor_polar_seed_max_r",      2.0);
     floor_polar_height_margin   = config.param<double>("wall_filter", "floor_polar_height_margin",   0.30);
     floor_polar_k_lowest        = config.param<int>   ("wall_filter", "floor_polar_k_lowest",        3);
+    floor_polar_flatness_threshold = config.param<double>("wall_filter", "floor_polar_flatness_threshold", 0.10); 
+    floor_polar_max_ground_height = config.param<double>("wall_filter", "floor_polar_max_ground_height", 0.5);  
     floor_polar_max_vertical_spread = config.param<double>("wall_filter", "floor_polar_max_vertical_spread", 0.30);
 
 
@@ -569,15 +571,19 @@ void WallFilter::polar_floor_segmentation(
 
     const double r_bin         = config_.floor_polar_r_bin;
     const double theta_rad     = config_.floor_polar_theta_deg * M_PI / 180.0;
+
     const double slope_thr     = config_.floor_polar_slope_threshold;
+    const double max_height    = config_.floor_polar_max_ground_height;
+    const double spread_thr    = config_.floor_polar_max_vertical_spread;
+    const double flatness_thr  = config_.floor_polar_flatness_threshold;
+
     const double seed_min_r    = config_.floor_polar_seed_min_r;
     const double seed_max_r    = config_.floor_polar_seed_max_r;
-    const double height_margin = config_.floor_polar_height_margin;
-    const int    k_lowest      = std::max(1, config_.floor_polar_k_lowest);
-    const double max_vertical_spread = config_.floor_polar_max_vertical_spread;
+
+    const int k_lowest         = std::max(1, config_.floor_polar_k_lowest);
     const double kInf          = std::numeric_limits<double>::max();
 
-    // Grid dimensions
+    // ---------------- GRID SIZE ----------------
     double max_r = 0.0;
     for (const auto& c : centroids)
         max_r = std::max(max_r, std::sqrt(c.x()*c.x() + c.y()*c.y()));
@@ -586,21 +592,27 @@ void WallFilter::polar_floor_segmentation(
     const int n_theta = static_cast<int>(std::ceil(2.0 * M_PI / theta_rad));
     const int n_r     = static_cast<int>(std::ceil(max_r / r_bin)) + 1;
 
-    // Per-cell statistics
-    std::vector<std::vector<double>> z_cell_values(n_theta * n_r);
+    // ---------------- STORAGE ----------------
+    std::vector<std::vector<double>> z_values(n_theta * n_r);
+
     std::vector<double> z_grid(n_theta * n_r, kInf);
+    std::vector<double> z_var_grid(n_theta * n_r, 0.0);
     std::vector<double> z_min_grid(n_theta * n_r, kInf);
     std::vector<double> z_max_grid(n_theta * n_r, -kInf);
+
+    std::vector<double> ground_score(n_theta * n_r, 0.0);
     std::vector<bool>   valid_grid(n_theta * n_r, false);
     std::vector<bool>   ground_grid(n_theta * n_r, false);
 
-    // Per-voxel cell mapping
     std::vector<int> voxel_t(nvox), voxel_r(nvox);
 
-    for (int i = 0; i < nvox; ++i) {
-        const auto& c  = centroids[i];
-        const double r = std::sqrt(c.x()*c.x() + c.y()*c.y());
-        const double theta = std::atan2(c.y(), c.x()) + M_PI; // [0, 2π)
+    // ---------------- FILL GRID ----------------
+    for (int i = 0; i < nvox; ++i)
+    {
+        const auto& c = centroids[i];
+
+        double r = std::sqrt(c.x()*c.x() + c.y()*c.y());
+        double theta = std::atan2(c.y(), c.x()) + M_PI;
 
         int r_idx = std::min(static_cast<int>(r / r_bin), n_r - 1);
         int t_idx = static_cast<int>(theta / theta_rad);
@@ -609,81 +621,145 @@ void WallFilter::polar_floor_segmentation(
         voxel_t[i] = t_idx;
         voxel_r[i] = r_idx;
 
-        z_cell_values[t_idx * n_r + r_idx].push_back(c.z());
+        z_values[t_idx * n_r + r_idx].push_back(c.z());
     }
 
-    for (int idx = 0; idx < n_theta * n_r; ++idx) {
-        auto& values = z_cell_values[idx];
-        if (values.empty()) continue;
+    // ---------------- ROBUST CELL STATS ----------------
+    for (int idx = 0; idx < n_theta * n_r; ++idx)
+    {
+        auto& v = z_values[idx];
+        if (v.size() < 3) continue;
 
-        std::sort(values.begin(), values.end());
-        const int k = std::min(static_cast<int>(values.size()), k_lowest);
+        std::sort(v.begin(), v.end());
+
+        z_min_grid[idx] = v.front();
+        z_max_grid[idx] = v.back();
+
+        double spread = z_max_grid[idx] - z_min_grid[idx];
+        if (spread > spread_thr) continue;
+
+        int k = std::min((int)v.size(), k_lowest);
+
         double sum = 0.0;
-        for (int j = 0; j < k; ++j) sum += values[j];
+        for (int i = 0; i < k; ++i)
+            sum += v[i];
 
-        z_grid[idx] = sum / static_cast<double>(k);
-        z_min_grid[idx] = values.front();
-        z_max_grid[idx] = values.back();
-        valid_grid[idx] = (z_max_grid[idx] - z_min_grid[idx] <= max_vertical_spread);
+        double mean = sum / k;
+        z_grid[idx] = mean;
+
+        // flatness (variance)
+        double var = 0.0;
+        for (int i = 0; i < v.size(); ++i)
+            var += (v[i] - mean) * (v[i] - mean);
+        var /= v.size();
+
+        z_var_grid[idx] = var;
+
+        // scoring
+        double score = 0.0;
+
+        if (var < flatness_thr) score += 1.0;
+        if (spread < spread_thr) score += 1.0;
+        if (z_grid[idx] != kInf) score += 1.0;
+
+        ground_score[idx] = score;
+        valid_grid[idx] = (score >= 2.0);
     }
 
+    // ---------------- SEED RANGE ----------------
     const int r_seed_min_idx = static_cast<int>(seed_min_r / r_bin);
     const int r_seed_max_idx = std::min(static_cast<int>(seed_max_r / r_bin), n_r - 1);
 
-    for (int t = 0; t < n_theta; ++t) {
-        // Find seed: lowest z in [seed_min_r, seed_max_r]
+    // ---------------- PROPAGATION ----------------
+    for (int t = 0; t < n_theta; ++t)
+    {
         double seed_z = kInf;
-        int    seed_r = -1;
-        for (int r = r_seed_min_idx; r <= r_seed_max_idx; ++r) {
-            const int idx = t * n_r + r;
+        int seed_r = -1;
+
+        for (int r = r_seed_min_idx; r <= r_seed_max_idx; ++r)
+        {
+            int idx = t * n_r + r;
             if (!valid_grid[idx]) continue;
-            const double z = z_grid[idx];
-            if (z < seed_z) { seed_z = z; seed_r = r; }
+
+            if (z_grid[idx] < seed_z)
+            {
+                seed_z = z_grid[idx];
+                seed_r = r;
+            }
         }
+
         if (seed_r < 0) continue;
 
         ground_grid[t * n_r + seed_r] = true;
 
-        // Propagate inward (toward sensor)
+        // inward
         double last_z = seed_z;
-        int    last_r = seed_r;
-        for (int r = seed_r - 1; r >= 0; --r) {
-            const int idx = t * n_r + r;
-            if (!valid_grid[idx]) continue; // empty or invalid vertical spread cell
-            const double z = z_grid[idx];
-            const double dr = (last_r - r) * r_bin;
-            if (dr <= 1e-6) continue;
-            if (std::abs(z - last_z) / dr < slope_thr) {
+        int last_r = seed_r;
+
+        for (int r = seed_r - 1; r >= 0; --r)
+        {
+            int idx = t * n_r + r;
+            if (!valid_grid[idx]) continue;
+
+            double z = z_grid[idx];
+            double dr = (last_r - r) * r_bin;
+            if (dr < 1e-6) continue;
+
+            double slope = std::abs(z - last_z) / dr;
+
+            if (slope < slope_thr &&
+                z <= seed_z + max_height)
+            {
                 ground_grid[idx] = true;
-                last_z = z; last_r = r;
-            } else { break; }
+                last_z = z;
+                last_r = r;
+            }
+            else break;
         }
 
-        // Propagate outward (away from sensor)
-        last_z = seed_z; last_r = seed_r;
-        for (int r = seed_r + 1; r < n_r; ++r) {
-            const int idx = t * n_r + r;
+        // outward
+        last_z = seed_z;
+        last_r = seed_r;
+
+        for (int r = seed_r + 1; r < n_r; ++r)
+        {
+            int idx = t * n_r + r;
             if (!valid_grid[idx]) continue;
-            const double z = z_grid[idx];
-            const double dr = (r - last_r) * r_bin;
-            if (std::abs(z - last_z) / dr < slope_thr) {
+
+            double z = z_grid[idx];
+            double dr = (r - last_r) * r_bin;
+            if (dr < 1e-6) continue;
+
+            double slope = std::abs(z - last_z) / dr;
+
+            if (slope < slope_thr &&
+                z <= seed_z + max_height)
+            {
                 ground_grid[idx] = true;
-                last_z = z; last_r = r;
-            } else { break; }
+                last_z = z;
+                last_r = r;
+            }
+            else break;
         }
     }
 
-    // Mark floor voxels
+    // ---------------- FINAL LABELING ----------------
     int count = 0;
-    for (int i = 0; i < nvox; ++i) {
-        if (!ground_grid[voxel_t[i] * n_r + voxel_r[i]]) continue;
-        const double ground_z = z_grid[voxel_t[i] * n_r + voxel_r[i]];
-        if (centroids[i].z() <= ground_z + height_margin) {
+
+    for (int i = 0; i < nvox; ++i)
+    {
+        int idx = voxel_t[i] * n_r + voxel_r[i];
+
+        if (!ground_grid[idx]) continue;
+
+        if (centroids[i].z() <= z_grid[idx] + max_height)
+        {
             voxelmap.lookup_voxel(i).is_ground = true;
             ++count;
         }
     }
-    spdlog::debug("[wall_filter] polar floor: {}/{} voxels classified as ground", count, nvox);
+
+    spdlog::debug("[wall_filter] Patchwork-light: {}/{} ground voxels", count, nvox);
 }
 
 BoundingBox WallFilter::build_wall_bbox(
