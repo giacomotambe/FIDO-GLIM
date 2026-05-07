@@ -49,21 +49,23 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     track_match_distance = config.param<double>("dynamic_cluster_extractor", "track_match_distance", 1.5);
     track_match_iou      = config.param<double>("dynamic_cluster_extractor", "track_match_iou",      0.3);
     track_max_missed     = config.param<int>   ("dynamic_cluster_extractor", "track_max_missed",     3);
-    min_dynamic_frames   = config.param<int>   ("dynamic_cluster_extractor", "min_dynamic_frames",   3);
+    min_dynamic_frames        = config.param<int>("dynamic_cluster_extractor", "min_dynamic_frames",        3);
+    permanent_dynamic_frames  = config.param<int>("dynamic_cluster_extractor", "permanent_dynamic_frames",  10);
+    permanent_static_frames   = config.param<int>("dynamic_cluster_extractor", "permanent_static_frames",   10);
 
     spdlog::debug("[cluster_extractor] eps_factor={:.2f} min_pts={} knn_max={} "
                   "min_cluster_voxels={} min_points_bbox={} "
                   "bbox_extent=[{:.2f},{:.2f}] bbox_volume=[{:.3f},{:.3f}] "
                   "cluster_iou_threshold={:.2f} peer_merge_distance={:.2f} "
                   "track_match_distance={:.2f} track_match_iou={:.2f} track_max_missed={} "
-                  "min_dynamic_frames={}",
+                  "min_dynamic_frames={} permanent_dynamic={} permanent_static={}",
                   eps_voxel_factor, min_pts, knn_max_neighbors,
                   min_cluster_voxels, min_points_for_bbox,
                   bbox_min_extent, bbox_max_extent,
                   bbox_min_volume, bbox_max_volume,
                   cluster_iou_threshold, peer_merge_distance,
                   track_match_distance, track_match_iou, track_max_missed,
-                  min_dynamic_frames);
+                  min_dynamic_frames, permanent_dynamic_frames, permanent_static_frames);
 }
 
 DynamicClusterExtractorParams::~DynamicClusterExtractorParams() = default;
@@ -516,9 +518,17 @@ void DynamicClusterExtractor::update_tracks(
 
         Track& t        = tracks_[p.t_idx];
         t.center        = bboxes[p.b_idx].get_center();
-        // Gate is_dynamic on the hysteresis counter updated by update_dynamic_feedback().
-        // A bbox is flagged dynamic only after min_dynamic_frames consecutive confirmations.
-        bboxes[p.b_idx].set_dynamic(t.dynamic_frames >= params_.min_dynamic_frames);
+        // Permanent state overrides the hysteresis counter.
+        if (t.permanent_state == PermanentState::DYNAMIC) {
+            bboxes[p.b_idx].set_dynamic(true);
+            bboxes[p.b_idx].set_locked(true);
+        } else if (t.permanent_state == PermanentState::STATIC) {
+            bboxes[p.b_idx].set_dynamic(false);
+            bboxes[p.b_idx].set_locked(true);
+        } else {
+            bboxes[p.b_idx].set_dynamic(t.dynamic_frames >= params_.min_dynamic_frames);
+            bboxes[p.b_idx].set_locked(false);
+        }
         t.last_bbox     = bboxes[p.b_idx];
         t.missed_frames = 0;
         t.age++;
@@ -572,17 +582,59 @@ void DynamicClusterExtractor::update_dynamic_feedback(
     const std::vector<BoundingBox>& post_rejection_bboxes)
 {
     for (auto& track : tracks_) {
+        // Permanently locked tracks keep their state for their entire lifetime.
+        if (track.permanent_state != PermanentState::NONE) {
+            spdlog::debug("[tracker] track={} PERMANENT_{}", track.id,
+                          track.permanent_state == PermanentState::DYNAMIC ? "DYNAMIC" : "STATIC");
+            continue;
+        }
+
+        // Find the matching post-rejection bbox by track_id.
+        bool is_dynamic_this_frame = false;
         bool found = false;
         for (const auto& bbox : post_rejection_bboxes) {
             if (bbox.get_track_id() != track.id) continue;
-            track.dynamic_frames = bbox.is_dynamic_bbox() ? track.dynamic_frames + 1 : 0;
+            is_dynamic_this_frame = bbox.is_dynamic_bbox();
             found = true;
             break;
         }
+
+        // Missed frame (occluded / merged cluster): reset both counters.
+        // age does not increment on a missed frame, so counting it as static
+        // evidence would let static_frames outrun age and trigger permanent
+        // state on a track that has not yet been observed enough times.
         if (!found) {
+            track.static_frames  = 0;
+            track.dynamic_frames = 0;
+            continue;
+        }
+
+        if (is_dynamic_this_frame) {
+            track.dynamic_frames++;
+            track.static_frames = 0;
+        } else {
+            track.static_frames++;
             track.dynamic_frames = 0;
         }
-        spdlog::debug("[tracker] track={} dynamic_frames={}", track.id, track.dynamic_frames);
+
+        // Check permanent state transitions (0 = feature disabled).
+        if (params_.permanent_dynamic_frames > 0 &&
+            track.dynamic_frames >= params_.permanent_dynamic_frames) {
+            track.permanent_state = PermanentState::DYNAMIC;
+            spdlog::info("[tracker] track={} -> PERMANENTLY DYNAMIC (age={})",
+                         track.id, track.age);
+        } else if (params_.permanent_static_frames > 0 &&
+                   track.static_frames >= params_.permanent_static_frames) {
+            track.permanent_state = PermanentState::STATIC;
+            spdlog::info("[tracker] track={} -> PERMANENTLY STATIC (age={})",
+                         track.id, track.age);
+        }
+
+        spdlog::debug("[tracker] track={} dyn={} sta={} perm={}",
+                      track.id, track.dynamic_frames, track.static_frames,
+                      track.permanent_state == PermanentState::NONE    ? "none"
+                      : track.permanent_state == PermanentState::DYNAMIC ? "DYNAMIC"
+                                                                          : "STATIC");
     }
 }
 

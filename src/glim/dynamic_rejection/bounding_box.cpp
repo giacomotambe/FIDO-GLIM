@@ -11,6 +11,7 @@ BoundingBox::BoundingBox()
       center(Eigen::Vector3d::Zero()),
       rotation(Eigen::Matrix3d::Identity()),
       is_dynamic(false),
+      is_locked_(false),
       track_id(-1),
       R_inv(Eigen::Matrix3d::Identity()),
       half_size(Eigen::Vector3d::Zero())
@@ -22,7 +23,8 @@ BoundingBox::BoundingBox(const Eigen::Vector3d& size,
     : size(size),
       center(center),
       rotation(rotation),
-      is_dynamic(false),  // default to static, can be set later
+      is_dynamic(false),
+      is_locked_(false),
       track_id(-1)
 {
     // Precompute values used in contains()

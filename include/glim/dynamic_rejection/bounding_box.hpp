@@ -33,6 +33,11 @@ public:
     const bool is_dynamic_bbox() const { return is_dynamic; }
     void set_dynamic(bool dynamic) { is_dynamic = dynamic; }
 
+    /// A locked bbox has reached a permanent state and propagate_to_clusters()
+    /// must not override its is_dynamic flag.
+    bool is_locked()         const { return is_locked_; }
+    void set_locked(bool v)        { is_locked_ = v; }
+
     int  get_track_id() const { return track_id; }
     void set_track_id(int id)  { track_id = id; }
 
@@ -41,6 +46,7 @@ private:
     Eigen::Vector3d center;
     Eigen::Matrix3d rotation;
     bool is_dynamic;
+    bool is_locked_ = false;  ///< True when the track has reached a permanent dynamic/static state.
     int  track_id;  ///< -1 = untracked / phantom
     // Precomputed for contains()
     Eigen::Matrix3d R_inv;

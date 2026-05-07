@@ -17,13 +17,18 @@ namespace glim {
 // ===========================================================================
 // Track
 // ===========================================================================
+
+enum class PermanentState { NONE, DYNAMIC, STATIC };
+
 struct Track {
     int             id;
     Eigen::Vector3d center;       ///< Last known center (current sensor frame)
     BoundingBox     last_bbox;    ///< Last matched bbox (for overlap gating)
     int             age;
     int             missed_frames;
-    int             dynamic_frames = 0;  ///< Consecutive frames confirmed dynamic by propagate_to_clusters()
+    int             dynamic_frames = 0;   ///< Consecutive frames confirmed dynamic by propagate_to_clusters()
+    int             static_frames  = 0;   ///< Consecutive frames confirmed static by propagate_to_clusters()
+    PermanentState  permanent_state = PermanentState::NONE;
 };
 
 // ===========================================================================
@@ -60,7 +65,9 @@ public:
     double track_match_distance; ///< Max center distance for track association [m]. Default: 1.5
     double track_match_iou;      ///< Min overlap for track association. Default: 0.3
     int    track_max_missed;     ///< Frames without match before track deletion. Default: 3
-    int    min_dynamic_frames;   ///< Consecutive confirmed-dynamic frames before bbox is flagged as dynamic. Default: 3
+    int    min_dynamic_frames;        ///< Consecutive confirmed-dynamic frames before bbox is flagged as dynamic. Default: 3
+    int    permanent_dynamic_frames;  ///< Consecutive dynamic frames to lock track as permanently dynamic. 0 = disabled. Default: 10
+    int    permanent_static_frames;   ///< Consecutive static frames to lock track as permanently static.  0 = disabled. Default: 10
 };
 
 // ===========================================================================

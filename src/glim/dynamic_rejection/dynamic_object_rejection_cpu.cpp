@@ -485,6 +485,15 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     std::vector<bool> cluster_is_dynamic(n_clusters, false);
     for (int c = 0; c < n_clusters; ++c) {
         if (total_count[c] == 0) continue;
+
+        if (cluster_bboxes[c].is_locked()) {
+            // Permanent state: don't recompute, honour the existing is_dynamic flag.
+            cluster_is_dynamic[c] = cluster_bboxes[c].is_dynamic_bbox();
+            spdlog::debug("[dynamic_rejection] cluster {} LOCKED -> {}",
+                          c, cluster_is_dynamic[c] ? "DYNAMIC" : "static");
+            continue;
+        }
+
         const double ratio = static_cast<double>(dynamic_count[c]) / total_count[c];
         cluster_is_dynamic[c] = (ratio > eff_prop_threshold);
         cluster_bboxes[c].set_dynamic(cluster_is_dynamic[c]);
