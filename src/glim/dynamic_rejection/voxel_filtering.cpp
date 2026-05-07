@@ -35,6 +35,16 @@ WallFilterConfig::WallFilterConfig() {
     wall_bbox_max_aspect_ratio = config.param<double>("wall_filter", "wall_bbox_max_aspect_ratio", 5.0);
     floor_height_threshold      = config.param<double>("wall_filter", "floor_height_threshold", 0.2);
 
+    floor_polar_enabled         = config.param<bool>  ("wall_filter", "floor_polar_enabled",         true);
+    floor_polar_r_bin           = config.param<double>("wall_filter", "floor_polar_r_bin",           0.5);
+    floor_polar_theta_deg       = config.param<double>("wall_filter", "floor_polar_theta_deg",       10.0);
+    floor_polar_slope_threshold = config.param<double>("wall_filter", "floor_polar_slope_threshold", 0.30);
+    floor_polar_seed_min_r      = config.param<double>("wall_filter", "floor_polar_seed_min_r",      0.3);
+    floor_polar_seed_max_r      = config.param<double>("wall_filter", "floor_polar_seed_max_r",      2.0);
+    floor_polar_height_margin   = config.param<double>("wall_filter", "floor_polar_height_margin",   0.30);
+    floor_polar_k_lowest        = config.param<int>   ("wall_filter", "floor_polar_k_lowest",        3);
+    floor_polar_max_vertical_spread = config.param<double>("wall_filter", "floor_polar_max_vertical_spread", 0.30);
+
 
 
     T_lidar_imu = sensor_config.param<Eigen::Isometry3d>("sensors", "T_lidar_imu", Eigen::Isometry3d::Identity());
@@ -222,20 +232,29 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Step 5 – Floor voxel classification
+    // ------------------------------------------------------------------
+    if (config_.floor_polar_enabled) {
+        polar_floor_segmentation(*voxelmap, nvox, centroids);
+    } else {
+        const double lower_z = lowest_point_z(centroids) + config_.floor_height_threshold;
+        for (int i = 0; i < nvox; ++i) {
+            auto& voxel = voxelmap->lookup_voxel(i);
+            if (voxel.mean.z() < lower_z) voxel.is_ground = true;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Step 6 – Wall bbox registry: mark voxels inside registered bboxes
+    // ------------------------------------------------------------------
     std::vector<bool> empty_bboxes;
     if (bbox_registry_ && !bbox_registry_->bboxes().empty()) {
         empty_bboxes.assign(bbox_registry_->bboxes().size(), true);
-        double lower_z = lowest_point_z(centroids) + config_.floor_height_threshold; // Soglia per escludere voxel troppo bassi per essere pareti
-        
-         // Marca i voxel che cadono dentro le bbox registrate
         int registry_marked = 0;
         for (int i = 0; i < nvox; ++i) {
             auto& voxel = voxelmap->lookup_voxel(i);
-            if (voxel.mean.z() < lower_z) {
-                voxel.is_wall = true;
-            }; 
             if (voxel.is_wall) continue;
-
             for (size_t j = 0; j < bbox_registry_->bboxes().size(); ++j) {
                 const auto& bbox = bbox_registry_->bboxes()[j];
                 if (bbox.contains(voxel.mean)) {
@@ -529,6 +548,142 @@ double WallFilter::lowest_point_z(const std::vector<Eigen::Vector3d>& pts) const
         if (p.z() < min_z) min_z = p.z();
     }
     return min_z;
+}
+
+// ---------------------------------------------------------------------------
+// Polar ground segmentation.
+//
+// Converts voxel centroids to (r, θ) polar coords centred on the sensor.
+// For each angular sector a ground seed is found at r ∈ [seed_min_r, seed_max_r]
+// (the cell with the lowest z), then propagated inward and outward using a
+// slope threshold Δz/Δr.  Voxels whose centroid falls in a confirmed ground
+// cell and is within height_margin above that cell's z_min are marked
+// is_ground = true.
+// ---------------------------------------------------------------------------
+void WallFilter::polar_floor_segmentation(
+    gtsam_points::DynamicVoxelMapCPU& voxelmap,
+    int nvox,
+    const std::vector<Eigen::Vector3d>& centroids) const
+{
+    if (nvox == 0) return;
+
+    const double r_bin         = config_.floor_polar_r_bin;
+    const double theta_rad     = config_.floor_polar_theta_deg * M_PI / 180.0;
+    const double slope_thr     = config_.floor_polar_slope_threshold;
+    const double seed_min_r    = config_.floor_polar_seed_min_r;
+    const double seed_max_r    = config_.floor_polar_seed_max_r;
+    const double height_margin = config_.floor_polar_height_margin;
+    const int    k_lowest      = std::max(1, config_.floor_polar_k_lowest);
+    const double max_vertical_spread = config_.floor_polar_max_vertical_spread;
+    const double kInf          = std::numeric_limits<double>::max();
+
+    // Grid dimensions
+    double max_r = 0.0;
+    for (const auto& c : centroids)
+        max_r = std::max(max_r, std::sqrt(c.x()*c.x() + c.y()*c.y()));
+    max_r += r_bin;
+
+    const int n_theta = static_cast<int>(std::ceil(2.0 * M_PI / theta_rad));
+    const int n_r     = static_cast<int>(std::ceil(max_r / r_bin)) + 1;
+
+    // Per-cell statistics
+    std::vector<std::vector<double>> z_cell_values(n_theta * n_r);
+    std::vector<double> z_grid(n_theta * n_r, kInf);
+    std::vector<double> z_min_grid(n_theta * n_r, kInf);
+    std::vector<double> z_max_grid(n_theta * n_r, -kInf);
+    std::vector<bool>   valid_grid(n_theta * n_r, false);
+    std::vector<bool>   ground_grid(n_theta * n_r, false);
+
+    // Per-voxel cell mapping
+    std::vector<int> voxel_t(nvox), voxel_r(nvox);
+
+    for (int i = 0; i < nvox; ++i) {
+        const auto& c  = centroids[i];
+        const double r = std::sqrt(c.x()*c.x() + c.y()*c.y());
+        const double theta = std::atan2(c.y(), c.x()) + M_PI; // [0, 2π)
+
+        int r_idx = std::min(static_cast<int>(r / r_bin), n_r - 1);
+        int t_idx = static_cast<int>(theta / theta_rad);
+        if (t_idx >= n_theta) t_idx = n_theta - 1;
+
+        voxel_t[i] = t_idx;
+        voxel_r[i] = r_idx;
+
+        z_cell_values[t_idx * n_r + r_idx].push_back(c.z());
+    }
+
+    for (int idx = 0; idx < n_theta * n_r; ++idx) {
+        auto& values = z_cell_values[idx];
+        if (values.empty()) continue;
+
+        std::sort(values.begin(), values.end());
+        const int k = std::min(static_cast<int>(values.size()), k_lowest);
+        double sum = 0.0;
+        for (int j = 0; j < k; ++j) sum += values[j];
+
+        z_grid[idx] = sum / static_cast<double>(k);
+        z_min_grid[idx] = values.front();
+        z_max_grid[idx] = values.back();
+        valid_grid[idx] = (z_max_grid[idx] - z_min_grid[idx] <= max_vertical_spread);
+    }
+
+    const int r_seed_min_idx = static_cast<int>(seed_min_r / r_bin);
+    const int r_seed_max_idx = std::min(static_cast<int>(seed_max_r / r_bin), n_r - 1);
+
+    for (int t = 0; t < n_theta; ++t) {
+        // Find seed: lowest z in [seed_min_r, seed_max_r]
+        double seed_z = kInf;
+        int    seed_r = -1;
+        for (int r = r_seed_min_idx; r <= r_seed_max_idx; ++r) {
+            const int idx = t * n_r + r;
+            if (!valid_grid[idx]) continue;
+            const double z = z_grid[idx];
+            if (z < seed_z) { seed_z = z; seed_r = r; }
+        }
+        if (seed_r < 0) continue;
+
+        ground_grid[t * n_r + seed_r] = true;
+
+        // Propagate inward (toward sensor)
+        double last_z = seed_z;
+        int    last_r = seed_r;
+        for (int r = seed_r - 1; r >= 0; --r) {
+            const int idx = t * n_r + r;
+            if (!valid_grid[idx]) continue; // empty or invalid vertical spread cell
+            const double z = z_grid[idx];
+            const double dr = (last_r - r) * r_bin;
+            if (dr <= 1e-6) continue;
+            if (std::abs(z - last_z) / dr < slope_thr) {
+                ground_grid[idx] = true;
+                last_z = z; last_r = r;
+            } else { break; }
+        }
+
+        // Propagate outward (away from sensor)
+        last_z = seed_z; last_r = seed_r;
+        for (int r = seed_r + 1; r < n_r; ++r) {
+            const int idx = t * n_r + r;
+            if (!valid_grid[idx]) continue;
+            const double z = z_grid[idx];
+            const double dr = (r - last_r) * r_bin;
+            if (std::abs(z - last_z) / dr < slope_thr) {
+                ground_grid[idx] = true;
+                last_z = z; last_r = r;
+            } else { break; }
+        }
+    }
+
+    // Mark floor voxels
+    int count = 0;
+    for (int i = 0; i < nvox; ++i) {
+        if (!ground_grid[voxel_t[i] * n_r + voxel_r[i]]) continue;
+        const double ground_z = z_grid[voxel_t[i] * n_r + voxel_r[i]];
+        if (centroids[i].z() <= ground_z + height_margin) {
+            voxelmap.lookup_voxel(i).is_ground = true;
+            ++count;
+        }
+    }
+    spdlog::debug("[wall_filter] polar floor: {}/{} voxels classified as ground", count, nvox);
 }
 
 BoundingBox WallFilter::build_wall_bbox(

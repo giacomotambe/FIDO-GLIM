@@ -18,10 +18,11 @@ struct DynamicGaussianVoxel : public gtsam_points::GaussianVoxel
         using Ptr = std::shared_ptr<DynamicGaussianVoxel>;
         using ConstPtr = std::shared_ptr<const DynamicGaussianVoxel>;
 
-        DynamicGaussianVoxel() : gtsam_points::GaussianVoxel(), is_dynamic(false), is_wall(false), voxel_point_cloud(nullptr), dynamic_score(0.0) {}
+        DynamicGaussianVoxel() : gtsam_points::GaussianVoxel(), is_dynamic(false), is_wall(false), is_ground(false), voxel_point_cloud(nullptr), dynamic_score(0.0) {}
     public:
         bool is_dynamic;
         bool is_wall;
+        bool is_ground; 
         std::vector<Eigen::Vector4d> voxel_points; 
         std::vector<double> voxel_intensities;
         std::vector<double> voxel_times;

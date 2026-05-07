@@ -180,7 +180,7 @@ DynamicClusterExtractor::cluster_voxels(
 
     for (int i = 0; i < nvox; ++i) {
         const auto& v = voxelmap->lookup_voxel(i);
-        if (!v.is_wall) {
+        if (!v.is_wall && !v.is_ground) {
             active_ids.push_back(i);
             active_cents.push_back(v.mean);
         }

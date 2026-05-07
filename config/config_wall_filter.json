@@ -10,6 +10,15 @@
       "floor_min_inliers": 250,
       "floor_height_threshold": 0.3,
       "max_planes": 8,
-      "wall_bbox_max_aspect_ratio": 5.0
+      "wall_bbox_max_aspect_ratio": 5.0,
+      "floor_polar_enabled": true,
+      "floor_polar_r_bin": 0.5,
+      "floor_polar_theta_deg": 10.0,
+      "floor_polar_slope_threshold": 0.10,
+      "floor_polar_seed_min_r": 5.0,
+      "floor_polar_seed_max_r": 10.0,
+      "floor_polar_k_lowest": 5,
+      "floor_polar_max_vertical_spread": 0.2,
+      "floor_polar_height_margin": 0.1
     }
 }

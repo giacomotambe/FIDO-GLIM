@@ -56,6 +56,17 @@ struct WallFilterConfig {
     double wall_bbox_max_aspect_ratio;
     double floor_height_threshold;
 
+    // --- Polar floor segmentation ---
+    bool   floor_polar_enabled;
+    double floor_polar_r_bin;
+    double floor_polar_theta_deg;
+    double floor_polar_slope_threshold;
+    double floor_polar_seed_min_r;
+    double floor_polar_seed_max_r;
+    double floor_polar_height_margin;
+    int    floor_polar_k_lowest;
+    double floor_polar_max_vertical_spread;
+
     Eigen::Isometry3d T_lidar_imu;
     Eigen::Isometry3d T_imu_lidar;
 
@@ -140,6 +151,10 @@ private:
     bool is_wall_bbox_compact(const BoundingBox& bbox) const;
 
     double lowest_point_z(const std::vector<Eigen::Vector3d>& pts) const;
+
+    void polar_floor_segmentation(gtsam_points::DynamicVoxelMapCPU& voxelmap,
+                                   int nvox,
+                                   const std::vector<Eigen::Vector3d>& centroids) const;
 
     WallFilterConfig  config_;
     mutable std::mt19937 rng_;
