@@ -60,6 +60,7 @@ public:
     /// Max center-to-center distance [m] to merge two current-frame bboxes.
     /// Set to 0.0 to disable. Default: 0.0
     double peer_merge_distance;
+    std::string env_type; ///< "INDOOR" or "OUTDOOR", used to select peer_merge_distance from config.
 
     // --- Tracking ---
     double track_match_distance; ///< Max center distance for track association [m]. Default: 1.5

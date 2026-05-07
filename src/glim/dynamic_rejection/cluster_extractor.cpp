@@ -30,7 +30,7 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     spdlog::debug("[cluster_extractor] loading config");
 
     Config config(GlobalConfig::get_config_path("config_dynamic_cluster_extractor"));
-
+    Config ros_config(GlobalConfig::get_config_path("config_ros"));
     eps_voxel_factor    = config.param<double>("dynamic_cluster_extractor", "eps_voxel_factor",    2.0);
     min_pts             = config.param<int>   ("dynamic_cluster_extractor", "min_pts",             1);
     knn_max_neighbors   = config.param<int>   ("dynamic_cluster_extractor", "knn_max_neighbors",   64);
@@ -43,8 +43,13 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     bbox_max_volume = config.param<double>("dynamic_cluster_extractor", "bbox_max_volume", 1e9);
 
     cluster_iou_threshold = config.param<double>("dynamic_cluster_extractor", "cluster_iou_threshold", 0.5);
-
-    peer_merge_distance = config.param<double>("dynamic_cluster_extractor", "peer_merge_distance", 0.0);
+    env_type = ros_config.param<std::string>("ros", "env_type", "OUTDOOR");
+    if (env_type == "OUTDOOR") {
+        peer_merge_distance = config.param<double>("dynamic_cluster_extractor", "peer_merge_distance_outdoor", 2.0);
+    } else {
+        peer_merge_distance = config.param<double>("dynamic_cluster_extractor", "peer_merge_distance_indoor", 1.0);
+    }
+    
 
     track_match_distance = config.param<double>("dynamic_cluster_extractor", "track_match_distance", 1.5);
     track_match_iou      = config.param<double>("dynamic_cluster_extractor", "track_match_iou",      0.3);
