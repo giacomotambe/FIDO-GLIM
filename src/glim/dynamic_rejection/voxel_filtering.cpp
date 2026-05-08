@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 #include <glim/preprocess/preprocessed_frame.hpp>
 #include <glim/util/config.hpp>
@@ -132,12 +133,6 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
             spdlog::debug("[wall_filter] wall plane: normal=({:.2f},{:.2f},{:.2f})",
                           plane.normal.x(), plane.normal.y(), plane.normal.z());
         }
-
-        if (is_floor_ceiling_plane(plane)) {
-            result.floor_planes.push_back(plane);
-            spdlog::debug("[wall_filter] floor plane: normal=({:.2f},{:.2f},{:.2f})",
-                          plane.normal.x(), plane.normal.y(), plane.normal.z());
-        }
     }
 
 
@@ -244,6 +239,49 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
         for (int i = 0; i < nvox; ++i) {
             auto& voxel = voxelmap->lookup_voxel(i);
             if (voxel.mean.z() < lower_z) voxel.is_ground = true;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Step 5b – RANSAC floor plane sui voxel ground → bbox → recupera FN
+    // ------------------------------------------------------------------
+    {
+        std::vector<Eigen::Vector3d> ground_pts;
+        ground_pts.reserve(nvox / 4);
+        for (int i = 0; i < nvox; ++i)
+            if (voxelmap->lookup_voxel(i).is_ground)
+                ground_pts.push_back(centroids[i]);
+
+        auto floor_plane = ransac_floor_plane(ground_pts);
+        if (floor_plane) {
+            std::vector<Eigen::Vector3d> inliers;
+            inliers.reserve(ground_pts.size());
+            for (const auto& p : ground_pts)
+                if (floor_plane->distance(p) < config_.ransac_inlier_threshold)
+                    inliers.push_back(p);
+
+            if (static_cast<int>(inliers.size()) >= config_.ransac_min_inliers) {
+                BoundingBox floor_bbox = build_wall_bbox(inliers, *floor_plane);
+                floor_bbox.inflate(config_.ransac_inlier_threshold);
+
+                // Usa la bbox come filtro: è ground solo ciò che ci sta dentro.
+                // Prima azzera tutti i flag is_ground, poi riassegna solo gli inlier.
+                int kept = 0, removed = 0;
+                for (int i = 0; i < nvox; ++i) {
+                    auto& voxel = voxelmap->lookup_voxel(i);
+                    
+                    if (floor_bbox.contains(voxel.mean)) {
+                        voxel.is_ground = true;
+                        ++kept;
+                    } else {
+                        voxel.is_ground = false;
+                        ++removed;
+                    }
+                }
+                spdlog::debug("[wall_filter] floor RANSAC bbox: kept={} removed={} ground voxels",
+                              kept, removed);
+                result.floor_bboxes.push_back(floor_bbox);
+            }
         }
     }
 
@@ -675,12 +713,10 @@ void WallFilter::polar_floor_segmentation(
     {
         double seed_z = kInf;
         int seed_r = -1;
-
         for (int r = r_seed_min_idx; r <= r_seed_max_idx; ++r)
         {
             int idx = t * n_r + r;
             if (!valid_grid[idx]) continue;
-
             if (z_grid[idx] < seed_z)
             {
                 seed_z = z_grid[idx];
@@ -695,18 +731,14 @@ void WallFilter::polar_floor_segmentation(
         // inward
         double last_z = seed_z;
         int last_r = seed_r;
-
         for (int r = seed_r - 1; r >= 0; --r)
         {
             int idx = t * n_r + r;
             if (!valid_grid[idx]) continue;
-
             double z = z_grid[idx];
             double dr = (last_r - r) * r_bin;
             if (dr < 1e-6) continue;
-
             double slope = std::abs(z - last_z) / dr;
-
             if (slope < slope_thr &&
                 z <= seed_z + max_height)
             {
@@ -725,13 +757,10 @@ void WallFilter::polar_floor_segmentation(
         {
             int idx = t * n_r + r;
             if (!valid_grid[idx]) continue;
-
             double z = z_grid[idx];
             double dr = (r - last_r) * r_bin;
             if (dr < 1e-6) continue;
-
             double slope = std::abs(z - last_z) / dr;
-
             if (slope < slope_thr &&
                 z <= seed_z + max_height)
             {
@@ -749,9 +778,7 @@ void WallFilter::polar_floor_segmentation(
     for (int i = 0; i < nvox; ++i)
     {
         int idx = voxel_t[i] * n_r + voxel_r[i];
-
         if (!ground_grid[idx]) continue;
-
         if (centroids[i].z() <= z_grid[idx] + max_height)
         {
             voxelmap.lookup_voxel(i).is_ground = true;
@@ -817,5 +844,50 @@ BoundingBox WallFilter::build_wall_bbox(
     return BoundingBox(size, world_center, R);
 }
 
+
+// ---------------------------------------------------------------------------
+std::optional<PlaneModel> WallFilter::ransac_floor_plane(
+    const std::vector<Eigen::Vector3d>& pts) const
+{
+    const int n = static_cast<int>(pts.size());
+    if (n < config_.ransac_min_inliers) return std::nullopt;
+
+    // Accetta solo piani con normale quasi verticale (pavimento/soffitto)
+    const double cos_thr = std::cos(config_.floor_ceiling_angle_deg * M_PI / 180.0);
+
+    std::uniform_int_distribution<int> dist(0, n - 1);
+    int best_count = 0;
+    std::vector<int> best_inliers;
+    PlaneModel best_plane;
+
+    for (int iter = 0; iter < config_.ransac_max_iterations; ++iter) {
+        int i0, i1, i2;
+        i0 = dist(rng_);
+        do { i1 = dist(rng_); } while (i1 == i0);
+        do { i2 = dist(rng_); } while (i2 == i0 || i2 == i1);
+
+        PlaneModel cand = fit_plane(pts[i0], pts[i1], pts[i2]);
+        if (std::abs(cand.normal.z()) < cos_thr) continue;  // troppo inclinato
+
+        auto inliers = find_inliers(pts, cand, config_.ransac_inlier_threshold);
+        if (static_cast<int>(inliers.size()) > best_count) {
+            best_count   = static_cast<int>(inliers.size());
+            best_inliers = std::move(inliers);
+            best_plane   = cand;
+
+            // Terminazione adattiva
+            const double w  = static_cast<double>(best_count) / n;
+            const double w3 = w * w * w;
+            if (w3 > 1.0 - 1e-9) break;
+            const double n_iter = std::log(1.0 - config_.ransac_confidence)
+                                / std::log(1.0 - w3 + 1e-10);
+            if (iter + 1 >= static_cast<int>(std::ceil(n_iter))) break;
+        }
+    }
+
+    if (best_count < config_.ransac_min_inliers) return std::nullopt;
+
+    return refit_plane(pts, best_inliers);
+}
 
 }  // namespace glim

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 #include <random>
 #include <Eigen/Core>
@@ -34,6 +35,7 @@ struct WallFilterResult {
     gtsam_points::DynamicVoxelMapCPU::Ptr voxelmap;
     std::vector<PlaneModel> wall_planes;
     std::vector<PlaneModel> floor_planes;
+    std::vector<BoundingBox> floor_bboxes;
     int num_wall_voxels  = 0;
     int num_total_voxels = 0;
 };
@@ -157,6 +159,11 @@ private:
     void polar_floor_segmentation(gtsam_points::DynamicVoxelMapCPU& voxelmap,
                                    int nvox,
                                    const std::vector<Eigen::Vector3d>& centroids) const;
+
+    /// RANSAC su centroidi già classificati come ground (vincolo: piano orizzontale).
+    /// Ritorna il piano fittato, o nullopt se non ci sono abbastanza inlier.
+    std::optional<PlaneModel> ransac_floor_plane(
+        const std::vector<Eigen::Vector3d>& ground_centroids) const;
 
     WallFilterConfig  config_;
     mutable std::mt19937 rng_;
