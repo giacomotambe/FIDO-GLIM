@@ -65,6 +65,8 @@
     // Dynamic rejection type
     "dynamic_rejection_type": "VOXEL", // "BBOX" / "VOXEL" / "NONE"
 
+    "env_type": "OUTDOOR", // "INDOOR" / "OUTDOOR" (used for peer merging distance)
+
     // "imu_topic": "/imu/data",
     // "points_topic": "/velodyne_points/points",
     // "image_topic": "/camera/image",

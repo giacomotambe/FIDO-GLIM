@@ -43,11 +43,16 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     bbox_max_volume = config.param<double>("dynamic_cluster_extractor", "bbox_max_volume", 1e9);
 
     cluster_iou_threshold = config.param<double>("dynamic_cluster_extractor", "cluster_iou_threshold", 0.5);
-    env_type = ros_config.param<std::string>("ros", "env_type", "OUTDOOR");
+    env_type = ros_config.param<std::string>("glim_ros", "env_type", "OUTDOOR");
+    spdlog::info("[cluster_extractor] environment type from ROS config: {}", env_type);
     if (env_type == "OUTDOOR") {
+       
         peer_merge_distance = config.param<double>("dynamic_cluster_extractor", "peer_merge_distance_outdoor", 2.0);
+        spdlog::info("[cluster_extractor] peer merge distance (outdoor): {}", peer_merge_distance);
     } else {
+        spdlog::info("[cluster_extractor] environment type: INDOOR");
         peer_merge_distance = config.param<double>("dynamic_cluster_extractor", "peer_merge_distance_indoor", 1.0);
+        spdlog::info("[cluster_extractor] peer merge distance (indoor): {}", peer_merge_distance);
     }
     
 
@@ -180,7 +185,7 @@ DynamicClusterExtractor::cluster_voxels(
 
     for (int i = 0; i < nvox; ++i) {
         const auto& v = voxelmap->lookup_voxel(i);
-        if (!v.is_wall && !v.is_ground) {
+        if (!v.is_wall && !v.is_ground && !v.is_outlier) {
             active_ids.push_back(i);
             active_cents.push_back(v.mean);
         }

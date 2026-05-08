@@ -227,7 +227,7 @@ void DynamicObjectRejectionCPU::score_voxels(
     const auto per_voxel = [&](int j) {
         auto& cur = current.lookup_voxel(j);
 
-        if (cur.is_wall || cur.is_ground) {
+        if (cur.is_wall || cur. is_ground || cur.is_outlier) {
             cur.is_dynamic    = false;
             cur.dynamic_score = 0.0;
             return;

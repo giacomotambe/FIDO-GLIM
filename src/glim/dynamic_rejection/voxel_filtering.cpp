@@ -50,6 +50,9 @@ WallFilterConfig::WallFilterConfig() {
 
 
 
+    floor_ransac_inlier_threshold = config.param<double>("wall_filter", "floor_ransac_inlier_threshold", 0.15);
+    max_detection_radius          = config.param<double>("wall_filter", "max_detection_radius",           0.0);
+
     T_lidar_imu = sensor_config.param<Eigen::Isometry3d>("sensors", "T_lidar_imu", Eigen::Isometry3d::Identity());
     T_imu_lidar = T_lidar_imu.inverse();
     spdlog::debug("[wall_filter] WallFilterConfig: res={} ransac_iter={} thresh={} min_inliers={} "
@@ -257,12 +260,12 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
             std::vector<Eigen::Vector3d> inliers;
             inliers.reserve(ground_pts.size());
             for (const auto& p : ground_pts)
-                if (floor_plane->distance(p) < config_.ransac_inlier_threshold)
+                if (floor_plane->distance(p) < config_.floor_ransac_inlier_threshold)
                     inliers.push_back(p);
 
             if (static_cast<int>(inliers.size()) >= config_.ransac_min_inliers) {
                 BoundingBox floor_bbox = build_wall_bbox(inliers, *floor_plane);
-                floor_bbox.inflate(config_.ransac_inlier_threshold);
+                floor_bbox.inflate(config_.floor_ransac_inlier_threshold);
 
                 // Usa la bbox come filtro: è ground solo ciò che ci sta dentro.
                 // Prima azzera tutti i flag is_ground, poi riassegna solo gli inlier.
@@ -314,6 +317,31 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
 
     
     if (bbox_registry_) bbox_registry_->remove_expired(empty_bboxes);
+
+    // ------------------------------------------------------------------
+    // Step 7 – Marca outlier usando le bbox del registry come perimetro.
+    // Ogni bbox-muro ha la normale come col(0) della sua rotazione.
+    // Si usa il registry (accumulato su più frame) invece dei piani del
+    // frame corrente, che potrebbero essere incompleti.
+    // ------------------------------------------------------------------
+    if (bbox_registry_ && !bbox_registry_->bboxes().empty()) {
+        std::vector<PlaneModel> registry_planes;
+        registry_planes.reserve(bbox_registry_->bboxes().size());
+        for (const auto& bbox : bbox_registry_->bboxes()) {
+            PlaneModel p;
+            p.normal = bbox.get_rotation().col(0).normalized();
+            p.d      = -p.normal.dot(bbox.get_center());
+            // Accetta solo bbox-muro (normale quasi orizzontale)
+            if (is_wall_plane(p))
+                registry_planes.push_back(p);
+        }
+        if (!registry_planes.empty())
+            mark_outlier_voxels(*voxelmap, nvox, centroids, registry_planes);
+    } else {
+        // Nessun registry: applica solo il fallback radiale
+        mark_outlier_voxels(*voxelmap, nvox, centroids, {});
+    }
+
     return result;
 }
 
@@ -846,6 +874,53 @@ BoundingBox WallFilter::build_wall_bbox(
 
 
 // ---------------------------------------------------------------------------
+void WallFilter::mark_outlier_voxels(
+    gtsam_points::DynamicVoxelMapCPU& voxelmap,
+    int nvox,
+    const std::vector<Eigen::Vector3d>& centroids,
+    const std::vector<PlaneModel>& wall_planes) const
+{
+    // Proiezione 2D di ogni piano-muro: f(x,y) = nx*x + ny*y + d
+    // L'origine (robot) valuta f_origin = d.
+    // Un voxel è "oltre il muro" se f_voxel * d < 0 (semipiano opposto all'origine).
+    struct Wall2D { double nx, ny, d; };
+    std::vector<Wall2D> walls2d;
+    walls2d.reserve(wall_planes.size());
+    for (const auto& p : wall_planes) {
+        if (std::abs(p.d) < 1e-6) continue;  // origine sul piano → skip
+        walls2d.push_back({p.normal.x(), p.normal.y(), p.d});
+    }
+
+    const bool use_radial = (config_.max_detection_radius > 0.0);
+    const double r2_max   = config_.max_detection_radius * config_.max_detection_radius;
+
+    int count = 0;
+    for (int i = 0; i < nvox; ++i) {
+        auto& voxel = voxelmap.lookup_voxel(i);
+        const double cx = centroids[i].x();
+        const double cy = centroids[i].y();
+
+        // Fallback radiale
+        if (use_radial && cx*cx + cy*cy > r2_max) {
+            voxel.is_outlier = true;
+            ++count;
+            continue;
+        }
+
+        // Check half-space 2D per ogni muro rilevato
+        for (const auto& w : walls2d) {
+            const double f = w.nx*cx + w.ny*cy + w.d;
+            if (f * w.d < 0.0) {
+                voxel.is_outlier = true;
+                ++count;
+                break;
+            }
+        }
+    }
+    spdlog::debug("[wall_filter] mark_outlier: {}/{} voxels marked", count, nvox);
+}
+
+// ---------------------------------------------------------------------------
 std::optional<PlaneModel> WallFilter::ransac_floor_plane(
     const std::vector<Eigen::Vector3d>& pts) const
 {
@@ -869,7 +944,7 @@ std::optional<PlaneModel> WallFilter::ransac_floor_plane(
         PlaneModel cand = fit_plane(pts[i0], pts[i1], pts[i2]);
         if (std::abs(cand.normal.z()) < cos_thr) continue;  // troppo inclinato
 
-        auto inliers = find_inliers(pts, cand, config_.ransac_inlier_threshold);
+        auto inliers = find_inliers(pts, cand, config_.floor_ransac_inlier_threshold);
         if (static_cast<int>(inliers.size()) > best_count) {
             best_count   = static_cast<int>(inliers.size());
             best_inliers = std::move(inliers);
@@ -886,7 +961,6 @@ std::optional<PlaneModel> WallFilter::ransac_floor_plane(
     }
 
     if (best_count < config_.ransac_min_inliers) return std::nullopt;
-
     return refit_plane(pts, best_inliers);
 }
 

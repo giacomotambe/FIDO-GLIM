@@ -71,6 +71,12 @@ struct WallFilterConfig {
     double floor_polar_max_ground_height;
     double floor_polar_max_vertical_spread;
 
+    // --- Floor RANSAC ---
+    double floor_ransac_inlier_threshold;  // soglia inlier specifica per il piano pavimento
+
+    // --- Outlier / perimetro ---
+    double max_detection_radius;   // fallback radiale: voxel oltre questa distanza XY → outlier (0 = disabilitato)
+
     Eigen::Isometry3d T_lidar_imu;
     Eigen::Isometry3d T_imu_lidar;
 
@@ -164,6 +170,14 @@ private:
     /// Ritorna il piano fittato, o nullopt se non ci sono abbastanza inlier.
     std::optional<PlaneModel> ransac_floor_plane(
         const std::vector<Eigen::Vector3d>& ground_centroids) const;
+
+    /// Marca is_outlier sui voxel che sono oltre i muri (check 2D half-space)
+    /// o oltre il fallback radiale. Chiamato dopo Step 4 indipendentemente
+    /// dal numero di piani trovati.
+    void mark_outlier_voxels(gtsam_points::DynamicVoxelMapCPU& voxelmap,
+                              int nvox,
+                              const std::vector<Eigen::Vector3d>& centroids,
+                              const std::vector<PlaneModel>& wall_planes) const;
 
     WallFilterConfig  config_;
     mutable std::mt19937 rng_;
