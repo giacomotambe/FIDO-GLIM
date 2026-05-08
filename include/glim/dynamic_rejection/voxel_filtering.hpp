@@ -171,13 +171,12 @@ private:
     std::optional<PlaneModel> ransac_floor_plane(
         const std::vector<Eigen::Vector3d>& ground_centroids) const;
 
-    /// Marca is_outlier sui voxel che sono oltre i muri (check 2D half-space)
-    /// o oltre il fallback radiale. Chiamato dopo Step 4 indipendentemente
-    /// dal numero di piani trovati.
+    /// Marca is_outlier sui voxel che sono oltre i muri (check half-space vincolato
+    /// all'estensione laterale della bbox) o oltre il fallback radiale.
     void mark_outlier_voxels(gtsam_points::DynamicVoxelMapCPU& voxelmap,
                               int nvox,
                               const std::vector<Eigen::Vector3d>& centroids,
-                              const std::vector<PlaneModel>& wall_planes) const;
+                              const std::vector<BoundingBox>& wall_bboxes) const;
 
     WallFilterConfig  config_;
     mutable std::mt19937 rng_;

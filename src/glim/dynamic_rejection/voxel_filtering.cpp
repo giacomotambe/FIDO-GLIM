@@ -320,23 +320,13 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
 
     // ------------------------------------------------------------------
     // Step 7 – Marca outlier usando le bbox del registry come perimetro.
-    // Ogni bbox-muro ha la normale come col(0) della sua rotazione.
-    // Si usa il registry (accumulato su più frame) invece dei piani del
-    // frame corrente, che potrebbero essere incompleti.
+    // Il check è vincolato all'estensione laterale di ogni bbox: un voxel
+    // viene marcato solo se è "dietro" il muro E la sua proiezione sul
+    // piano cade entro le dimensioni reali del muro (evita falsi positivi
+    // in stanze non convesse).
     // ------------------------------------------------------------------
     if (bbox_registry_ && !bbox_registry_->bboxes().empty()) {
-        std::vector<PlaneModel> registry_planes;
-        registry_planes.reserve(bbox_registry_->bboxes().size());
-        for (const auto& bbox : bbox_registry_->bboxes()) {
-            PlaneModel p;
-            p.normal = bbox.get_rotation().col(0).normalized();
-            p.d      = -p.normal.dot(bbox.get_center());
-            // Accetta solo bbox-muro (normale quasi orizzontale)
-            if (is_wall_plane(p))
-                registry_planes.push_back(p);
-        }
-        if (!registry_planes.empty())
-            mark_outlier_voxels(*voxelmap, nvox, centroids, registry_planes);
+        mark_outlier_voxels(*voxelmap, nvox, centroids, bbox_registry_->bboxes());
     } else {
         // Nessun registry: applica solo il fallback radiale
         mark_outlier_voxels(*voxelmap, nvox, centroids, {});
@@ -878,17 +868,35 @@ void WallFilter::mark_outlier_voxels(
     gtsam_points::DynamicVoxelMapCPU& voxelmap,
     int nvox,
     const std::vector<Eigen::Vector3d>& centroids,
-    const std::vector<PlaneModel>& wall_planes) const
+    const std::vector<BoundingBox>& wall_bboxes) const
 {
-    // Proiezione 2D di ogni piano-muro: f(x,y) = nx*x + ny*y + d
-    // L'origine (robot) valuta f_origin = d.
-    // Un voxel è "oltre il muro" se f_voxel * d < 0 (semipiano opposto all'origine).
-    struct Wall2D { double nx, ny, d; };
-    std::vector<Wall2D> walls2d;
-    walls2d.reserve(wall_planes.size());
-    for (const auto& p : wall_planes) {
-        if (std::abs(p.d) < 1e-6) continue;  // origine sul piano → skip
-        walls2d.push_back({p.normal.x(), p.normal.y(), p.d});
+    // Per ogni bbox-muro, un voxel è outlier solo se:
+    //   1. È sul lato "dietro" il muro rispetto al sensore (origine)
+    //   2. La sua proiezione sul piano del muro ricade entro l'estensione
+    //      laterale reale della bbox (evita falsi positivi su piani non convessi).
+    struct WallData {
+        Eigen::Matrix3d R_T;       // R^T: trasforma da world a frame locale del muro
+        Eigen::Vector3d center;
+        double half_y, half_z;     // semi-estensioni laterali
+        double origin_local_x;     // = n · (origin - center) = d: dice da che lato è il sensore
+    };
+
+    std::vector<WallData> walls;
+    walls.reserve(wall_bboxes.size());
+    for (const auto& bbox : wall_bboxes) {
+        PlaneModel p;
+        p.normal = bbox.get_rotation().col(0).normalized();
+        p.d      = -p.normal.dot(bbox.get_center());
+        if (!is_wall_plane(p)) continue;
+        if (std::abs(p.d) < 1e-6) continue;  // sensore sul piano → skip
+
+        WallData wd;
+        wd.R_T            = bbox.get_rotation().transpose();
+        wd.center         = bbox.get_center();
+        wd.half_y         = bbox.get_size().y() * 0.5;
+        wd.half_z         = bbox.get_size().z() * 0.5;
+        wd.origin_local_x = p.d;  // n · (0 - center)
+        walls.push_back(wd);
     }
 
     const bool use_radial = (config_.max_detection_radius > 0.0);
@@ -897,24 +905,28 @@ void WallFilter::mark_outlier_voxels(
     int count = 0;
     for (int i = 0; i < nvox; ++i) {
         auto& voxel = voxelmap.lookup_voxel(i);
-        const double cx = centroids[i].x();
-        const double cy = centroids[i].y();
+        const Eigen::Vector3d& c = centroids[i];
 
         // Fallback radiale
-        if (use_radial && cx*cx + cy*cy > r2_max) {
+        if (use_radial && c.x()*c.x() + c.y()*c.y() > r2_max) {
             voxel.is_outlier = true;
             ++count;
             continue;
         }
 
-        // Check half-space 2D per ogni muro rilevato
-        for (const auto& w : walls2d) {
-            const double f = w.nx*cx + w.ny*cy + w.d;
-            if (f * w.d < 0.0) {
-                voxel.is_outlier = true;
-                ++count;
-                break;
-            }
+        for (const auto& wd : walls) {
+            const Eigen::Vector3d local = wd.R_T * (c - wd.center);
+
+            // Il voxel deve essere sul lato opposto al sensore
+            if (local.x() * wd.origin_local_x >= 0.0) continue;
+
+            // La proiezione laterale deve stare dentro l'estensione del muro
+            if (std::abs(local.y()) > wd.half_y) continue;
+            if (std::abs(local.z()) > wd.half_z) continue;
+
+            voxel.is_outlier = true;
+            ++count;
+            break;
         }
     }
     spdlog::debug("[wall_filter] mark_outlier: {}/{} voxels marked", count, nvox);
