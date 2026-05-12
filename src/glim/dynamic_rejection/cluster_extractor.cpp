@@ -122,7 +122,12 @@ static std::vector<BoundingBox> nms3D(
         result.push_back(boxes[ii]);
         for (int j = i + 1; j < N; ++j) {
             const int jj = candidates[j].idx;
-            if (!suppressed[jj] && boxes[ii].overlap(boxes[jj]) > iou_threshold)
+            if (suppressed[jj]) continue;
+            // Track protection: two bboxes with distinct known tracks must stay separate.
+            const int tid_ii = boxes[ii].get_track_id();
+            const int tid_jj = boxes[jj].get_track_id();
+            if (tid_jj != -1 && tid_ii != -1 && tid_jj != tid_ii) continue;
+            if (boxes[ii].overlap(boxes[jj]) > iou_threshold)
                 suppressed[jj] = true;
         }
     }
@@ -146,22 +151,33 @@ std::vector<BoundingBox> DynamicClusterExtractor::extract_clusters(
 
     const auto clusters = build_point_clusters(voxelmap, cluster_map, num_clusters);
     auto bboxes = compute_bounding_boxes(clusters);
-    bboxes = nms3D(bboxes, params_.cluster_iou_threshold);
-
-    spdlog::debug("[cluster_extractor] {} bboxes after NMS", bboxes.size());
-
-    bboxes = merge_nearby_clusters(bboxes);
-
-    spdlog::debug("[cluster_extractor] {} bboxes after peer merge", bboxes.size());
 
     if (pose_kalman_filter_) {
         const double dt = (last_stamp_ > 0.0 && stamp > last_stamp_) ? (stamp - last_stamp_) : 0.0;
         last_stamp_ = stamp;
 
-        const Eigen::Isometry3d cur_pose      = pose_kalman_filter_->getPose();
-        const Eigen::Isometry3d T_to_current  = (cur_pose * last_pose_.inverse()).inverse();
+        const Eigen::Isometry3d cur_pose     = pose_kalman_filter_->getPose();
+        const Eigen::Isometry3d T_to_current = (cur_pose * last_pose_.inverse()).inverse();
         last_pose_ = cur_pose;
+
+        // Label bboxes with historical track state BEFORE NMS/merge so that
+        // bboxes with distinct known tracks are protected from suppression/absorption.
+        if (!tracks_.empty()) {
+            label_bboxes_from_tracks(bboxes, T_to_current);
+        }
+
+        bboxes = nms3D(bboxes, params_.cluster_iou_threshold);
+        spdlog::debug("[cluster_extractor] {} bboxes after NMS", bboxes.size());
+
+        bboxes = merge_nearby_clusters(bboxes);
+        spdlog::debug("[cluster_extractor] {} bboxes after peer merge", bboxes.size());
+
         update_tracks(bboxes, T_to_current, dt);
+    } else {
+        bboxes = nms3D(bboxes, params_.cluster_iou_threshold);
+        spdlog::debug("[cluster_extractor] {} bboxes after NMS", bboxes.size());
+        bboxes = merge_nearby_clusters(bboxes);
+        spdlog::debug("[cluster_extractor] {} bboxes after peer merge", bboxes.size());
     }
 
     return bboxes;
@@ -460,7 +476,15 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_nearby_clusters(
                 const int j = order[jj];
                 if (absorbed[j]) continue;
                 if ((centers[i] - centers[j]).squaredNorm() <= d2_max) {
+                    // Track protection: two bboxes with distinct known track IDs must stay separate.
+                    const int  tid_i = working[i].get_track_id();
+                    const int  tid_j = working[j].get_track_id();
+                    if (tid_i != -1 && tid_j != -1 && tid_i != tid_j) continue;
+                    const int  kept_tid = (tid_i != -1) ? tid_i : tid_j;
+                    const bool kept_dyn = working[i].is_dynamic_bbox() || working[j].is_dynamic_bbox();
                     working[i] = compute_union_bbox(working[i], working[j]);
+                    working[i].set_track_id(kept_tid);
+                    working[i].set_dynamic(kept_dyn);
                     centers[i] = working[i].get_center();
                     absorbed[j] = true;
                     any_merge   = true;
@@ -477,6 +501,50 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_nearby_clusters(
 
     spdlog::debug("[merge_nearby_clusters] {} -> {} bboxes", bboxes.size(), working.size());
     return working;
+}
+
+// ===========================================================================
+// label_bboxes_from_tracks()
+//
+// Read-only pre-pass: for each current-frame bbox, find the best-matching
+// track from the previous frame and copy its is_dynamic label and track_id.
+// Track state is never mutated.  The label is temporary — update_tracks()
+// will re-assign it correctly based on hysteresis after NMS/merge.
+// ===========================================================================
+
+void DynamicClusterExtractor::label_bboxes_from_tracks(
+    std::vector<BoundingBox>& bboxes,
+    const Eigen::Isometry3d&  T_to_current) const
+{
+    const double D2 = params_.track_match_distance * params_.track_match_distance;
+
+    for (auto& bbox : bboxes) {
+        double best_ov  = 0.0;
+        bool   is_dyn   = false;
+        int    best_tid = -1;
+
+        for (const auto& t : tracks_) {
+            const Eigen::Vector3d c_curr = T_to_current * t.center;
+            if ((c_curr - bbox.get_center()).squaredNorm() > D2) continue;
+
+            BoundingBox last_curr = t.last_bbox;
+            last_curr.transform(T_to_current);
+            const double ov = last_curr.overlap(bbox);
+            if (ov < params_.track_match_iou || ov <= best_ov) continue;
+
+            best_ov  = ov;
+            best_tid = t.id;
+            if (t.permanent_state == PermanentState::STATIC) {
+                is_dyn = false;
+            } else if (t.permanent_state == PermanentState::DYNAMIC) {
+                is_dyn = true;
+            } else {
+                is_dyn = (t.dynamic_frames >= params_.min_dynamic_frames);
+            }
+        }
+        bbox.set_dynamic(is_dyn);
+        bbox.set_track_id(best_tid);
+    }
 }
 
 // ===========================================================================

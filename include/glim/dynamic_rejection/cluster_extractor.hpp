@@ -109,6 +109,11 @@ private:
     /// Merge nearby current-frame bboxes (iterative, by center distance).
     std::vector<BoundingBox> merge_nearby_clusters(const std::vector<BoundingBox>& bboxes) const;
 
+    /// Read-only pass: propagate track ID and is_dynamic from track history onto fresh bboxes
+    /// BEFORE NMS/merge so that bboxes with distinct known tracks are protected from
+    /// suppression or absorption by each other.
+    void label_bboxes_from_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current) const;
+
     /// Match bboxes to tracks by overlap, assign IDs, create/prune tracks.
     /// dt: time elapsed since last call [s], used for velocity estimation (0 = skip).
     void update_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current, double dt);

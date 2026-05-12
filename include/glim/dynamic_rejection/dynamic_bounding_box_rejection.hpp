@@ -20,7 +20,7 @@ public:
      */
     PreprocessedFrame::Ptr reject(const PreprocessedFrame::Ptr frame);  
     void insert_bounding_boxes(BoundingBox& bbox);
-    void clear_bounding_boxes() { bboxes_.clear(); }
+    std::vector<BoundingBox> get_bounding_boxes() const { return bboxes_; }
     void set_bounding_boxes(const std::vector<BoundingBox>& bboxes) { bboxes_ = bboxes; }
     PreprocessedFrame::Ptr get_last_dynamic_frame() const { return last_dynamic_frame; }
 
@@ -29,6 +29,8 @@ private:
     std::vector<int> find_neighbors(const Eigen::Vector4d* points, const int num_points, const int k) const;
 private:
     std::vector<BoundingBox> bboxes_;
+    std::vector<int>         bbox_ages_;   ///< frame age of each bbox; removed when age > max_bbox_frames_
+    int                      max_bbox_frames_;
     PreprocessedFrame::Ptr last_dynamic_frame = nullptr;
     double inflate_margin_;
     VelocityInflationParams inflate_params_;

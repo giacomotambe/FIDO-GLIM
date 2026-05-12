@@ -18,12 +18,14 @@
 #endif
 namespace glim {
 DynamicBBoxRejection::DynamicBBoxRejection(const std::vector<BoundingBox>& bbox)
-    : bboxes_(bbox) {
+    : bboxes_(bbox), bbox_ages_(bbox.size(), 0) {
     Config config(GlobalConfig::get_config_path("config_bbox_rejection"));
-    inflate_margin_ = config.param<double>("param_bbox_rejection", "inflate_margin", 0.0);
-    inflate_params_ = VelocityInflationParams::from_config();
-    spdlog::info("DynamicBBoxRejection: inflate_margin={} v_fwd_k={} v_rear_k={} v_lat_k={} v_min={}",
-        inflate_margin_, inflate_params_.v_fwd_k, inflate_params_.v_rear_k,
+    inflate_margin_  = config.param<double>("param_bbox_rejection", "inflate_margin",  0.0);
+    max_bbox_frames_ = config.param<int>   ("param_bbox_rejection", "max_bbox_frames", 5);
+    inflate_params_  = VelocityInflationParams::from_config();
+    spdlog::info("DynamicBBoxRejection: inflate_margin={} max_bbox_frames={} v_fwd_k={} v_rear_k={} v_lat_k={} v_min={}",
+        inflate_margin_, max_bbox_frames_,
+        inflate_params_.v_fwd_k, inflate_params_.v_rear_k,
         inflate_params_.v_lat_k, inflate_params_.v_min);
 }
 
@@ -31,6 +33,22 @@ DynamicBBoxRejection::DynamicBBoxRejection(const std::vector<BoundingBox>& bbox)
 DynamicBBoxRejection::~DynamicBBoxRejection() = default;
 
 PreprocessedFrame::Ptr DynamicBBoxRejection::reject(const PreprocessedFrame::Ptr frame) {
+    // Age all bboxes and discard those that have exceeded max_bbox_frames_.
+    {
+        std::vector<BoundingBox> alive;
+        std::vector<int>         alive_ages;
+        alive.reserve(bboxes_.size());
+        alive_ages.reserve(bbox_ages_.size());
+        for (size_t i = 0; i < bboxes_.size(); ++i) {
+            if (bbox_ages_[i] < max_bbox_frames_) {
+                alive.push_back(bboxes_[i]);
+                alive_ages.push_back(bbox_ages_[i] + 1);
+            }
+        }
+        bboxes_    = std::move(alive);
+        bbox_ages_ = std::move(alive_ages);
+    }
+
     std::vector<Eigen::Vector4d> filtered_points;
     std::vector<double> filtered_intensities;
     std::vector<double> filtered_times;
@@ -95,6 +113,7 @@ PreprocessedFrame::Ptr DynamicBBoxRejection::reject(const PreprocessedFrame::Ptr
 void DynamicBBoxRejection::insert_bounding_boxes(BoundingBox& bbox) {
     bbox.inflate(inflate_margin_);
     bboxes_.push_back(bbox);
+    bbox_ages_.push_back(0);
 }
 
 std::vector<int> DynamicBBoxRejection::find_neighbors(const Eigen::Vector4d* points, const int num_points, const int k) const {
