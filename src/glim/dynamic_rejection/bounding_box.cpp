@@ -3,8 +3,21 @@
 #include <Eigen/Core>
 #include <glim/dynamic_rejection/bounding_box.hpp>
 #include <cmath>
+#include <glim/util/config.hpp>
 
 namespace glim {
+
+VelocityInflationParams VelocityInflationParams::from_config() {
+    VelocityInflationParams p;
+    Config config(GlobalConfig::get_config_path("config_bbox_rejection"));
+    p.v_fwd_k     = config.param<double>("param_bbox_rejection", "velocity_inflation_k",        p.v_fwd_k);
+    p.v_rear_k    = config.param<double>("param_bbox_rejection", "rear_inflation_k",             p.v_rear_k);
+    p.v_lat_k     = config.param<double>("param_bbox_rejection", "lateral_inflation_k",          p.v_lat_k);
+    p.v_vert_k    = config.param<double>("param_bbox_rejection", "vertical_inflation_k",         p.v_vert_k);
+    p.v_min       = config.param<double>("param_bbox_rejection", "velocity_inflation_min",       p.v_min);
+    p.v_max_speed = config.param<double>("param_bbox_rejection", "velocity_inflation_max_speed", p.v_max_speed);
+    return p;
+}
 
 BoundingBox::BoundingBox()
     : size(Eigen::Vector3d::Zero()),
@@ -91,12 +104,14 @@ double BoundingBox::iou(const BoundingBox& other) const {
 }
 
 bool BoundingBox::contains_inflated(const Eigen::Vector4d& point,
-                                     double v_fwd_k, double v_rear_k,
-                                     double v_lat_k, double v_min) const
+                                     const VelocityInflationParams& p) const
 {
-    if (speed_xy_ <= v_min) {
+    if (speed_xy_ <= p.v_min) {
         return contains(point);
     }
+
+    // Clamp effective speed to avoid unbounded ellipsoid growth at high speed.
+    const double eff_speed = std::min(speed_xy_, p.v_max_speed);
 
     const Eigen::Vector3d dp = point.head<3>() - center;
 
@@ -109,14 +124,14 @@ bool BoundingBox::contains_inflated(const Eigen::Vector4d& point,
     const double v = -dp.x() * sin_h + dp.y() * cos_h;   // lateral (perpendicular in XY)
     const double w =  dp.z();                              // vertical
 
-    // Base horizontal semi-axis: largest bbox half-side in XY
     const double h_base = std::max(half_size.x(), half_size.y());
-    const double semi_z = std::max(half_size.z(), 1e-6);
 
-    // Asymmetric ellipsoid: forward inflated more than rear
-    const double semi_u   = (u >= 0.0) ? h_base + speed_xy_ * v_fwd_k
-                                       : h_base + speed_xy_ * v_rear_k;
-    const double semi_lat = h_base + speed_xy_ * v_lat_k;
+    // Asymmetric ellipsoid: forward inflated more than rear, speed capped
+    const double semi_u   = (u >= 0.0) ? h_base + eff_speed * p.v_fwd_k
+                                       : h_base + eff_speed * p.v_rear_k;
+    const double semi_lat = h_base + eff_speed * p.v_lat_k;
+    // Vertical: base half-height plus speed-proportional inflation
+    const double semi_z   = std::max(half_size.z(), 1e-6) + eff_speed * p.v_vert_k;
 
     const double eu = u / semi_u;
     const double ev = v / semi_lat;

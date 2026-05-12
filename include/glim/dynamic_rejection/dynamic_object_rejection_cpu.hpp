@@ -205,6 +205,7 @@ private:
     std::vector<BoundingBox> last_cluster_bboxes_;
 
     double motion_scale_ = 1.0;  ///< Current-frame motion scale factor, updated in reject().
+    VelocityInflationParams inflate_params_;  ///< Shared with BBOX mode, loaded from config_bbox_rejection.json.
 };
 
 }  // namespace glim

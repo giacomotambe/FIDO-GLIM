@@ -8,7 +8,7 @@
       2. build_point_clusters() — collect raw points per cluster
       3. compute_bounding_boxes() + nms3D() — AABB per cluster, remove duplicates
       4. merge_nearby_clusters() — iteratively merge bboxes closer than peer_merge_distance
-      5. update_tracks()        — overlap-based tracking (no velocity estimation)
+      5. update_tracks()        — overlap-based tracking with EMA velocity estimation
 */
 
 #include <glim/dynamic_rejection/cluster_extractor.hpp>
@@ -134,7 +134,7 @@ static std::vector<BoundingBox> nms3D(
 // ===========================================================================
 
 std::vector<BoundingBox> DynamicClusterExtractor::extract_clusters(
-    gtsam_points::DynamicVoxelMapCPU::Ptr voxelmap)
+    gtsam_points::DynamicVoxelMapCPU::Ptr voxelmap, double stamp)
 {
     const auto cluster_map = cluster_voxels(voxelmap);
 
@@ -155,10 +155,13 @@ std::vector<BoundingBox> DynamicClusterExtractor::extract_clusters(
     spdlog::debug("[cluster_extractor] {} bboxes after peer merge", bboxes.size());
 
     if (pose_kalman_filter_) {
+        const double dt = (last_stamp_ > 0.0 && stamp > last_stamp_) ? (stamp - last_stamp_) : 0.0;
+        last_stamp_ = stamp;
+
         const Eigen::Isometry3d cur_pose      = pose_kalman_filter_->getPose();
         const Eigen::Isometry3d T_to_current  = (cur_pose * last_pose_.inverse()).inverse();
         last_pose_ = cur_pose;
-        update_tracks(bboxes, T_to_current);
+        update_tracks(bboxes, T_to_current, dt);
     }
 
     return bboxes;
@@ -487,7 +490,8 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_nearby_clusters(
 
 void DynamicClusterExtractor::update_tracks(
     std::vector<BoundingBox>& bboxes,
-    const Eigen::Isometry3d&  T_to_current)
+    const Eigen::Isometry3d&  T_to_current,
+    double                    dt)
 {
     const int N_tracks = static_cast<int>(tracks_.size());
     const int N_bboxes = static_cast<int>(bboxes.size());
@@ -526,7 +530,18 @@ void DynamicClusterExtractor::update_tracks(
         track_matched[p.t_idx] = true;
         bbox_matched [p.b_idx] = true;
 
-        Track& t        = tracks_[p.t_idx];
+        Track& t = tracks_[p.t_idx];
+
+        // Velocity estimation: displacement of the compensated center in m/s.
+        // t.center has already been transformed to the current frame (line ~497).
+        if (dt > 0.0) {
+            const Eigen::Vector3d disp = bboxes[p.b_idx].get_center() - t.center;
+            const Eigen::Vector3d vel_meas = disp / dt;
+            // EMA: rotate previous estimate into current frame before blending.
+            t.velocity = 0.6 * (T_to_current.rotation() * t.velocity) + 0.4 * vel_meas;
+        }
+        bboxes[p.b_idx].set_velocity(t.velocity);
+
         t.center        = bboxes[p.b_idx].get_center();
         // Permanent state overrides the hysteresis counter.
         if (t.permanent_state == PermanentState::DYNAMIC) {

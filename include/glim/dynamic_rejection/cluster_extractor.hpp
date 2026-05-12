@@ -29,6 +29,7 @@ struct Track {
     int             dynamic_frames = 0;   ///< Consecutive frames confirmed dynamic by propagate_to_clusters()
     int             static_frames  = 0;   ///< Consecutive frames confirmed static by propagate_to_clusters()
     PermanentState  permanent_state = PermanentState::NONE;
+    Eigen::Vector3d velocity = Eigen::Vector3d::Zero();  ///< EMA-smoothed velocity [m/s] in current sensor frame
 };
 
 // ===========================================================================
@@ -99,7 +100,8 @@ public:
 
     const DynamicClusterExtractorParams& params() const { return params_; }
 
-    std::vector<BoundingBox> extract_clusters(gtsam_points::DynamicVoxelMapCPU::Ptr voxelmap);
+    /// stamp: scan timestamp in seconds, used to compute dt for velocity estimation.
+    std::vector<BoundingBox> extract_clusters(gtsam_points::DynamicVoxelMapCPU::Ptr voxelmap, double stamp = 0.0);
 
 private:
     bool createAABB(const std::vector<Eigen::Vector4d>& cluster, BoundingBox& out_bbox) const;
@@ -108,7 +110,8 @@ private:
     std::vector<BoundingBox> merge_nearby_clusters(const std::vector<BoundingBox>& bboxes) const;
 
     /// Match bboxes to tracks by overlap, assign IDs, create/prune tracks.
-    void update_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current);
+    /// dt: time elapsed since last call [s], used for velocity estimation (0 = skip).
+    void update_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current, double dt);
 
 public:
     /// Called after reject() to feed propagate_to_clusters() results back into track dynamic counters.
@@ -122,6 +125,7 @@ private:
 
     std::vector<Track> tracks_;
     int                next_track_id_ = 0;
+    double             last_stamp_    = 0.0;
 };
 
 } // namespace glim

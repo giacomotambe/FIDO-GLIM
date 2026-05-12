@@ -5,6 +5,21 @@
 
 namespace glim {
 
+/// Velocity-based ellipsoid inflation parameters.
+/// Shared between DynamicBBoxRejection (BBOX mode) and
+/// DynamicObjectRejectionCPU (VOXEL mode) to avoid config duplication.
+struct VelocityInflationParams {
+    double v_fwd_k     = 3.0;   ///< Forward semi-axis multiplier  (h_base + speed * k)
+    double v_rear_k    = 0.45;  ///< Rear semi-axis multiplier
+    double v_lat_k     = 0.60;  ///< Lateral semi-axis multiplier
+    double v_vert_k    = 0.20;  ///< Vertical semi-axis multiplier (up & down)
+    double v_min       = 0.05;  ///< Minimum XY speed [m/s] to activate ellipsoid inflation
+    double v_max_speed = 5.0;   ///< Speed saturation [m/s]: inflation is capped at this speed
+
+    /// Load values from config_bbox_rejection.json (falls back to defaults).
+    static VelocityInflationParams from_config();
+};
+
 class BoundingBox {
 public:
     BoundingBox();
@@ -50,8 +65,7 @@ public:
     /// forward/rear semi-axes (proportional to speed) and no vertical inflation.
     /// Falls back to contains() when speed < v_min.
     bool contains_inflated(const Eigen::Vector4d& point,
-                           double v_fwd_k, double v_rear_k,
-                           double v_lat_k, double v_min) const;
+                           const VelocityInflationParams& p) const;
 
 private:
     Eigen::Vector3d size;

@@ -1,9 +1,11 @@
 {
   "param_bbox_rejection": {
-    "inflate_margin": 0.0,
-    "velocity_inflation_k":   3.0,
-    "rear_inflation_k":       0.45,
-    "lateral_inflation_k":    0.60,
-    "velocity_inflation_min": 0.05
+    "inflate_margin":                  0.0,
+    "velocity_inflation_k":            3.0,
+    "rear_inflation_k":                0.45,
+    "lateral_inflation_k":             0.60,
+    "vertical_inflation_k":            0.20,
+    "velocity_inflation_min":          0.05,
+    "velocity_inflation_max_speed":    5.0
   }
 }

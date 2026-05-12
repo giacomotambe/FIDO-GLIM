@@ -96,7 +96,7 @@ void AsyncDynamicObjectRejection::run() {
 
             auto t_cluster = std::chrono::steady_clock::now();
             if (cluster_extractor_ && wf.voxelmap) {
-                cluster_bboxes = cluster_extractor_->extract_clusters(wf.voxelmap);
+                cluster_bboxes = cluster_extractor_->extract_clusters(wf.voxelmap, frame->stamp);
                 spdlog::debug("[dynamic_rejection][async] cluster_bboxes size={}", cluster_bboxes.size());
             }
             spdlog::debug("[PERF] cluster_extract  {:.1f} ms  ({} bbox)", T(t_cluster), cluster_bboxes.size());

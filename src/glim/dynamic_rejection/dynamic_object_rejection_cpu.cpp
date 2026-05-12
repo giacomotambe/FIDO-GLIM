@@ -76,11 +76,15 @@ DynamicObjectRejectionCPU::DynamicObjectRejectionCPU(
     : params_(params), pose_kalman_filter_(pose_kalman_filter), last_pose_(Eigen::Isometry3d::Identity())
 {
     covariance_estimation_ = std::make_unique<CloudCovarianceEstimation>(params_.num_threads);
+    inflate_params_ = VelocityInflationParams::from_config();
 
     if (!pose_kalman_filter_) {
         pose_kalman_filter_ = std::make_shared<PoseKalmanFilter>();
     }
 
+    spdlog::info("[dynamic_rejection] inflate params: v_fwd_k={} v_rear_k={} v_lat_k={} v_min={}",
+        inflate_params_.v_fwd_k, inflate_params_.v_rear_k,
+        inflate_params_.v_lat_k, inflate_params_.v_min);
     spdlog::debug("[dynamic_rejection] DynamicObjectRejectionCPU constructed");
 }
 
@@ -240,24 +244,31 @@ void DynamicObjectRejectionCPU::score_voxels(
         cur.is_dynamic    = false;
         cur.dynamic_score = 0.0;
 
-        // ---- Cluster bbox check ----
-        bool in_any_bbox      = false;
-        bool possibly_dynamic = false;
+        // ---- Cluster bbox check (base AABB + velocity-inflated ellipsoid) ----
+        // Dynamic-wins policy: scan ALL clusters before scoring.
+        // If a voxel overlaps both a static bbox (tree) and a dynamic bbox (person),
+        // the dynamic match takes priority so the static one cannot mask it.
+        bool in_any_bbox          = false;
+        bool in_any_dynamic_bbox  = false;
+        bool possibly_dynamic     = false;
 
         for (int c = 0; c < n_clusters; ++c) {
-            if (cluster_bboxes[c].contains(cur.mean)) {
-                in_any_bbox = true;
-                if (!cluster_bboxes[c].is_dynamic_bbox()) {
-                    cur.dynamic_score -= params_.w_cluster * 0.5;
-                } else {
-                    cur.dynamic_score += params_.w_cluster;
-                    possibly_dynamic = true;
-                }
-                break;
+            const bool in_base = cluster_bboxes[c].contains(cur.mean);
+            const bool in_inflated = !in_base && cluster_bboxes[c].is_dynamic_bbox() &&
+                cluster_bboxes[c].contains_inflated(cur.mean, inflate_params_);
+            if (!(in_base || in_inflated)) continue;
+            in_any_bbox = true;
+            if (cluster_bboxes[c].is_dynamic_bbox()) {
+                in_any_dynamic_bbox = true;
+                break;   // found a dynamic cluster — no need to keep scanning
             }
         }
-        if (!in_any_bbox) {
-            cur.dynamic_score -= params_.w_cluster * 0.5;
+        // Score: dynamic-wins. The static penalty only applies when NO dynamic cluster contains this voxel.
+        if (in_any_dynamic_bbox) {
+            cur.dynamic_score += params_.w_cluster;
+            possibly_dynamic = true;
+        } else {
+            cur.dynamic_score -= params_.w_cluster * 0.5;  // static cluster or outside all clusters
         }
 
         // ---- Transform centroid into previous frame ----
@@ -458,18 +469,20 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     const int nvox      = nvox_of(voxelmap);
     const int n_clusters = static_cast<int>(cluster_bboxes.size());
 
-    std::vector<int>  voxel_cluster(nvox, -1);
     std::vector<int>  dynamic_count(n_clusters, 0);
     std::vector<int>  total_count  (n_clusters, 0);
 
+    // Dynamic-wins multi-cluster assignment:
+    // A voxel that overlaps multiple bboxes contributes to ALL of them.
+    // This prevents a static bbox (tree) from masking a dynamic bbox (person)
+    // that contains the same voxels.
     for (int j = 0; j < nvox; ++j) {
         const auto& v = voxelmap.lookup_voxel(j);
         for (int c = 0; c < n_clusters; ++c) {
             if (cluster_bboxes[c].contains(v.mean)) {
-                voxel_cluster[j] = c;
                 ++total_count[c];
                 if (v.is_dynamic) ++dynamic_count[c];
-                break;
+                // No break: voxel contributes to ALL containing clusters
             }
         }
     }
@@ -502,20 +515,37 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
                       cluster_is_dynamic[c] ? "DYNAMIC" : "static");
     }
 
+    // Pre-collect dynamic cluster indices to avoid re-scanning all clusters per voxel.
+    std::vector<int> dynamic_cluster_ids;
+    for (int c = 0; c < n_clusters; ++c)
+        if (cluster_is_dynamic[c]) dynamic_cluster_ids.push_back(c);
+
     for (int j = 0; j < nvox; ++j) {
-        const int c = voxel_cluster[j];
         auto& v = voxelmap.lookup_voxel(j);
-        
-        
-        if (!v.is_wall) {
-            if (c < 0) {
-                v.is_dynamic = false;  // outside all clusters → static
-                continue;
-            } else if (cluster_bboxes[c].is_dynamic_bbox()) {
-                v.is_dynamic = true;
-            } else {
-                v.is_dynamic = false;
+        if (v.is_wall) continue;
+
+        // Scan ALL clusters: dynamic-wins — if ANY containing cluster is confirmed
+        // dynamic this frame, the voxel is dynamic regardless of overlapping static clusters.
+        bool in_any     = false;
+        bool in_dynamic = false;
+        for (int c = 0; c < n_clusters; ++c) {
+            if (!cluster_bboxes[c].contains(v.mean)) continue;
+            in_any = true;
+            if (cluster_is_dynamic[c]) { in_dynamic = true; break; }
+        }
+
+        if (in_any) {
+            v.is_dynamic = in_dynamic;
+        } else {
+            // Outside all base bboxes — check velocity-inflated zones of confirmed-dynamic clusters.
+            bool in_inflated = false;
+            for (int dc : dynamic_cluster_ids) {
+                if (cluster_bboxes[dc].contains_inflated(v.mean, inflate_params_)) {
+                    in_inflated = true;
+                    break;
+                }
             }
+            v.is_dynamic = in_inflated;
         }
     }
 }
