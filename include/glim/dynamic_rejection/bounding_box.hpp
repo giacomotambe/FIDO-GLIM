@@ -41,6 +41,18 @@ public:
     int  get_track_id() const { return track_id; }
     void set_track_id(int id)  { track_id = id; }
 
+    void set_velocity(const Eigen::Vector3d& v) { velocity_ = v; speed_xy_ = std::hypot(v.x(), v.y()); }
+    const Eigen::Vector3d& get_velocity() const { return velocity_; }
+    double get_speed_xy()               const { return speed_xy_; }
+
+    /// Returns true if `point` falls inside the velocity-inflated ellipsoid.
+    /// The ellipsoid is aligned with the XY velocity direction, has asymmetric
+    /// forward/rear semi-axes (proportional to speed) and no vertical inflation.
+    /// Falls back to contains() when speed < v_min.
+    bool contains_inflated(const Eigen::Vector4d& point,
+                           double v_fwd_k, double v_rear_k,
+                           double v_lat_k, double v_min) const;
+
 private:
     Eigen::Vector3d size;
     Eigen::Vector3d center;
@@ -51,6 +63,9 @@ private:
     // Precomputed for contains()
     Eigen::Matrix3d R_inv;
     Eigen::Vector3d half_size;
+    // Velocity for ellipsoid inflation
+    Eigen::Vector3d velocity_ = Eigen::Vector3d::Zero();
+    double          speed_xy_ = 0.0;
 };
 
 }  // namespace glim

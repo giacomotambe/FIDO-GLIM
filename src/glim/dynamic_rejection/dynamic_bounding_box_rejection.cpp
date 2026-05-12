@@ -20,8 +20,13 @@ namespace glim {
 DynamicBBoxRejection::DynamicBBoxRejection(const std::vector<BoundingBox>& bbox)
     : bboxes_(bbox) {
     Config config(GlobalConfig::get_config_path("config_bbox_rejection"));
-    inflate_margin_ = config.param<double>("param_bbox_rejection", "inflate_margin", 0.0);
-    spdlog::info("DynamicBBoxRejection: inflate_margin = {}", inflate_margin_);
+    inflate_margin_ = config.param<double>("param_bbox_rejection", "inflate_margin",           0.0);
+    v_fwd_k_        = config.param<double>("param_bbox_rejection", "velocity_inflation_k",     3.0);
+    v_rear_k_       = config.param<double>("param_bbox_rejection", "rear_inflation_k",         0.45);
+    v_lat_k_        = config.param<double>("param_bbox_rejection", "lateral_inflation_k",      0.60);
+    v_min_          = config.param<double>("param_bbox_rejection", "velocity_inflation_min",   0.05);
+    spdlog::info("DynamicBBoxRejection: inflate_margin={} v_fwd_k={} v_rear_k={} v_lat_k={} v_min={}",
+        inflate_margin_, v_fwd_k_, v_rear_k_, v_lat_k_, v_min_);
 }
 
 
@@ -40,7 +45,8 @@ PreprocessedFrame::Ptr DynamicBBoxRejection::reject(const PreprocessedFrame::Ptr
         const Eigen::Vector4d& point = frame->points[i];
         bool is_dynamic = false;
         for (const auto& bbox : bboxes_) {
-            if (bbox.contains(point)) {
+            if (bbox.contains(point) ||
+                bbox.contains_inflated(point, v_fwd_k_, v_rear_k_, v_lat_k_, v_min_)) {
                 is_dynamic = true;
                 dynamic_points.push_back(point);
                 if (!frame->intensities.empty()) {

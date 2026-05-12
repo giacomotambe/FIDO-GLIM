@@ -90,6 +90,41 @@ double BoundingBox::iou(const BoundingBox& other) const {
     return vol_inter / (vol_a + vol_b - vol_inter + 1e-9);
 }
 
+bool BoundingBox::contains_inflated(const Eigen::Vector4d& point,
+                                     double v_fwd_k, double v_rear_k,
+                                     double v_lat_k, double v_min) const
+{
+    if (speed_xy_ <= v_min) {
+        return contains(point);
+    }
+
+    const Eigen::Vector3d dp = point.head<3>() - center;
+
+    // Heading unit vector from XY velocity projection
+    const double cos_h = velocity_.x() / speed_xy_;
+    const double sin_h = velocity_.y() / speed_xy_;
+
+    // Decompose displacement into heading / lateral / vertical axes
+    const double u =  dp.x() * cos_h + dp.y() * sin_h;   // along heading
+    const double v = -dp.x() * sin_h + dp.y() * cos_h;   // lateral (perpendicular in XY)
+    const double w =  dp.z();                              // vertical
+
+    // Base horizontal semi-axis: largest bbox half-side in XY
+    const double h_base = std::max(half_size.x(), half_size.y());
+    const double semi_z = std::max(half_size.z(), 1e-6);
+
+    // Asymmetric ellipsoid: forward inflated more than rear
+    const double semi_u   = (u >= 0.0) ? h_base + speed_xy_ * v_fwd_k
+                                       : h_base + speed_xy_ * v_rear_k;
+    const double semi_lat = h_base + speed_xy_ * v_lat_k;
+
+    const double eu = u / semi_u;
+    const double ev = v / semi_lat;
+    const double ew = w / semi_z;
+
+    return (eu * eu + ev * ev + ew * ew <= 1.0);
+}
+
 double BoundingBox::overlap(const BoundingBox& other) const {
     const Eigen::Vector3d inter_min = (center - half_size).cwiseMax(other.center - other.half_size);
     const Eigen::Vector3d inter_max = (center + half_size).cwiseMin(other.center + other.half_size);

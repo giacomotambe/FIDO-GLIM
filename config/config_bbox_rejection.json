@@ -1,7 +1,9 @@
 {
   "param_bbox_rejection": {
-    // Extra margin (metres) added to each side of every bounding box before
-    // the point-in-box test.  Set to 0 to disable inflation.
-    "inflate_margin": 0.0
+    "inflate_margin": 0.0,
+    "velocity_inflation_k":   3.0,
+    "rear_inflation_k":       0.45,
+    "lateral_inflation_k":    0.60,
+    "velocity_inflation_min": 0.05
   }
 }
