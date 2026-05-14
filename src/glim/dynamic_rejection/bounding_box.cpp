@@ -12,10 +12,13 @@ VelocityInflationParams VelocityInflationParams::from_config() {
     Config config(GlobalConfig::get_config_path("config_bbox_rejection"));
     p.v_fwd_k     = config.param<double>("param_bbox_rejection", "velocity_inflation_k",        p.v_fwd_k);
     p.v_rear_k    = config.param<double>("param_bbox_rejection", "rear_inflation_k",             p.v_rear_k);
+    p.v_rear_k    = config.param<double>("param_bbox_rejection", "reverse_velocity_inflation_k", p.v_rear_k);
     p.v_lat_k     = config.param<double>("param_bbox_rejection", "lateral_inflation_k",          p.v_lat_k);
     p.v_vert_k    = config.param<double>("param_bbox_rejection", "vertical_inflation_k",         p.v_vert_k);
     p.v_min       = config.param<double>("param_bbox_rejection", "velocity_inflation_min",       p.v_min);
     p.v_max_speed = config.param<double>("param_bbox_rejection", "velocity_inflation_max_speed", p.v_max_speed);
+    p.ellipse_box_cover_scale =
+        config.param<double>("param_bbox_rejection", "ellipse_box_cover_scale", p.ellipse_box_cover_scale);
     return p;
 }
 
@@ -106,38 +109,51 @@ double BoundingBox::iou(const BoundingBox& other) const {
 bool BoundingBox::contains_inflated(const Eigen::Vector4d& point,
                                      const VelocityInflationParams& p) const
 {
-    if (speed_xy_ <= p.v_min) {
-        return contains(point);
+    // Clamp effective speed to avoid unbounded ellipsoid growth at high speed.
+    const double eff_speed = speed_xy_ > p.v_min ? std::min(speed_xy_, p.v_max_speed) : 0.0;
+
+    const Eigen::Vector3d p3 = point.head<3>();
+    const Eigen::Vector3d dp = p3 - center;
+    const Eigen::Vector3d local_p = R_inv * dp;
+
+    if (std::abs(local_p.z()) > half_size.z()) {
+        return false;
     }
 
-    // Clamp effective speed to avoid unbounded ellipsoid growth at high speed.
-    const double eff_speed = std::min(speed_xy_, p.v_max_speed);
-
-    const Eigen::Vector3d dp = point.head<3>() - center;
-
-    // Heading unit vector from XY velocity projection
-    const double cos_h = velocity_.x() / speed_xy_;
-    const double sin_h = velocity_.y() / speed_xy_;
+    double cos_h = rotation(0, 0);
+    double sin_h = rotation(1, 0);
+    if (speed_xy_ > p.v_min) {
+        cos_h = velocity_.x() / speed_xy_;
+        sin_h = velocity_.y() / speed_xy_;
+    }
 
     // Decompose displacement into heading / lateral / vertical axes
-    const double u =  dp.x() * cos_h + dp.y() * sin_h;   // along heading
-    const double v = -dp.x() * sin_h + dp.y() * cos_h;   // lateral (perpendicular in XY)
-    const double w =  dp.z();                              // vertical
+    const double center_shift = 0.5 * eff_speed * (p.v_fwd_k - p.v_rear_k);
+    const double shifted_x = dp.x() - center_shift * cos_h;
+    const double shifted_y = dp.y() - center_shift * sin_h;
+    const double u =  shifted_x * cos_h + shifted_y * sin_h;   // along heading
+    const double v = -shifted_x * sin_h + shifted_y * cos_h;   // lateral
 
-    const double h_base = std::max(half_size.x(), half_size.y());
-
-    // Asymmetric ellipsoid: forward inflated more than rear, speed capped
-    const double semi_u   = (u >= 0.0) ? h_base + eff_speed * p.v_fwd_k
-                                       : h_base + eff_speed * p.v_rear_k;
-    const double semi_lat = h_base + eff_speed * p.v_lat_k;
-    // Vertical: base half-height plus speed-proportional inflation
-    const double semi_z   = std::max(half_size.z(), 1e-6) + eff_speed * p.v_vert_k;
+    const double cover_scale = std::max(p.ellipse_box_cover_scale, 1.0);
+    const Eigen::Vector2d heading_axis(cos_h, sin_h);
+    const Eigen::Vector2d lateral_axis(-sin_h, cos_h);
+    const Eigen::Vector2d box_x_axis(rotation(0, 0), rotation(1, 0));
+    const Eigen::Vector2d box_y_axis(rotation(0, 1), rotation(1, 1));
+    const double bbox_half_u =
+        std::abs(heading_axis.dot(box_x_axis)) * half_size.x() +
+        std::abs(heading_axis.dot(box_y_axis)) * half_size.y();
+    const double bbox_half_v =
+        std::abs(lateral_axis.dot(box_x_axis)) * half_size.x() +
+        std::abs(lateral_axis.dot(box_y_axis)) * half_size.y();
+    const double semi_u = std::max(
+        cover_scale * bbox_half_u + 0.5 * eff_speed * (p.v_fwd_k + p.v_rear_k),
+        1e-6);
+    const double semi_lat = std::max(cover_scale * bbox_half_v + eff_speed * p.v_lat_k, 1e-6);
 
     const double eu = u / semi_u;
     const double ev = v / semi_lat;
-    const double ew = w / semi_z;
 
-    return (eu * eu + ev * ev + ew * ew <= 1.0);
+    return (eu * eu + ev * ev <= 1.0);
 }
 
 double BoundingBox::overlap(const BoundingBox& other) const {

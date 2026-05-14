@@ -5,16 +5,17 @@
 
 namespace glim {
 
-/// Velocity-based ellipsoid inflation parameters.
+/// Velocity-based 2D footprint inflation parameters.
 /// Shared between DynamicBBoxRejection (BBOX mode) and
 /// DynamicObjectRejectionCPU (VOXEL mode) to avoid config duplication.
 struct VelocityInflationParams {
-    double v_fwd_k     = 3.0;   ///< Forward semi-axis multiplier  (h_base + speed * k)
-    double v_rear_k    = 0.45;  ///< Rear semi-axis multiplier
-    double v_lat_k     = 0.60;  ///< Lateral semi-axis multiplier
-    double v_vert_k    = 0.20;  ///< Vertical semi-axis multiplier (up & down)
+    double v_fwd_k     = 3.0;   ///< Forward footprint multiplier  (half_x + speed * k)
+    double v_rear_k    = 0.45;  ///< Rear footprint multiplier
+    double v_lat_k     = 0.60;  ///< Lateral footprint multiplier
+    double v_vert_k    = 0.20;  ///< Legacy vertical multiplier (unused by the 2D footprint filter)
     double v_min       = 0.05;  ///< Minimum XY speed [m/s] to activate ellipsoid inflation
     double v_max_speed = 5.0;   ///< Speed saturation [m/s]: inflation is capped at this speed
+    double ellipse_box_cover_scale = 1.41421356237; ///< Base ellipse scale that covers the inflated bbox corners.
 
     /// Load values from config_bbox_rejection.json (falls back to defaults).
     static VelocityInflationParams from_config();
@@ -60,10 +61,9 @@ public:
     const Eigen::Vector3d& get_velocity() const { return velocity_; }
     double get_speed_xy()               const { return speed_xy_; }
 
-    /// Returns true if `point` falls inside the velocity-inflated ellipsoid.
-    /// The ellipsoid is aligned with the XY velocity direction, has asymmetric
-    /// forward/rear semi-axes (proportional to speed) and no vertical inflation.
-    /// Falls back to contains() when speed < v_min.
+    /// Returns true if `point` falls inside the inflated 2D ellipse footprint
+    /// and inside the already-inflated bbox height. The footprint is shifted
+    /// along XY velocity to extend more in front than behind.
     bool contains_inflated(const Eigen::Vector4d& point,
                            const VelocityInflationParams& p) const;
 

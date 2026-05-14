@@ -1,11 +1,16 @@
 {
   "param_bbox_rejection": {
     "inflate_margin":                  0.0,
+    "bbox_potentially_dynamic_min_track_age": 5,
+    "bbox_static_min_track_age":       8,
+    "bbox_min_static_velocity":        0.1,
     "velocity_inflation_k":            3.0,
+    "reverse_velocity_inflation_k":    0.45,
     "rear_inflation_k":                0.45,
     "lateral_inflation_k":             0.60,
     "vertical_inflation_k":            0.20,
     "velocity_inflation_min":          0.05,
-    "velocity_inflation_max_speed":    5.0
+    "velocity_inflation_max_speed":    5.0,
+    "ellipse_box_cover_scale":         1.41421356237
   }
 }
