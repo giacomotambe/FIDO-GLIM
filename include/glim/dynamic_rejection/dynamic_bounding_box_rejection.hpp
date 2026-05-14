@@ -21,8 +21,9 @@ public:
     PreprocessedFrame::Ptr reject(const PreprocessedFrame::Ptr frame);  
     void insert_bounding_boxes(BoundingBox& bbox);
     std::vector<BoundingBox> get_bounding_boxes() const { return bboxes_; }
-    void set_bounding_boxes(const std::vector<BoundingBox>& bboxes) { bboxes_ = bboxes; }
+    void set_bounding_boxes(const std::vector<BoundingBox>& bboxes);
     PreprocessedFrame::Ptr get_last_dynamic_frame() const { return last_dynamic_frame; }
+    std::vector<int> get_last_removed_counts() const { return last_removed_counts_; }
 
     const VelocityInflationParams& get_inflate_params() const { return inflate_params_; }
 private:
@@ -30,10 +31,11 @@ private:
 private:
     std::vector<BoundingBox> bboxes_;
     std::vector<int>         bbox_ages_;   ///< frame age of each bbox; removed when age > max_bbox_frames_
+    std::vector<int>         last_removed_counts_;
     int                      max_bbox_frames_;
     PreprocessedFrame::Ptr last_dynamic_frame = nullptr;
     double inflate_margin_;
     VelocityInflationParams inflate_params_;
-};  
+};
 
-}  // namespace glim    
+}  // namespace glim

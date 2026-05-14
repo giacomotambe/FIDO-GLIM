@@ -18,7 +18,7 @@
 #endif
 namespace glim {
 DynamicBBoxRejection::DynamicBBoxRejection(const std::vector<BoundingBox>& bbox)
-    : bboxes_(bbox), bbox_ages_(bbox.size(), 0) {
+    : bboxes_(bbox), bbox_ages_(bbox.size(), 0), last_removed_counts_(bbox.size(), 0) {
     Config config(GlobalConfig::get_config_path("config_bbox_rejection"));
     inflate_margin_  = config.param<double>("param_bbox_rejection", "inflate_margin",  0.0);
     max_bbox_frames_ = config.param<int>   ("param_bbox_rejection", "max_bbox_frames", 5);
@@ -48,6 +48,8 @@ PreprocessedFrame::Ptr DynamicBBoxRejection::reject(const PreprocessedFrame::Ptr
         bboxes_    = std::move(alive);
         bbox_ages_ = std::move(alive_ages);
     }
+    last_removed_counts_.assign(bboxes_.size(), 0);
+    last_dynamic_frame.reset();
 
     std::vector<Eigen::Vector4d> filtered_points;
     std::vector<double> filtered_intensities;
@@ -60,10 +62,14 @@ PreprocessedFrame::Ptr DynamicBBoxRejection::reject(const PreprocessedFrame::Ptr
     for (size_t i = 0; i < frame->points.size(); ++i) {
         const Eigen::Vector4d& point = frame->points[i];
         bool is_dynamic = false;
-        for (const auto& bbox : bboxes_) {
+        for (size_t bbox_idx = 0; bbox_idx < bboxes_.size(); ++bbox_idx) {
+            const auto& bbox = bboxes_[bbox_idx];
             if (bbox.contains(point) ||
                 bbox.contains_inflated(point, inflate_params_)) {
                 is_dynamic = true;
+                if (bbox_idx < last_removed_counts_.size()) {
+                    ++last_removed_counts_[bbox_idx];
+                }
                 dynamic_points.push_back(point);
                 if (!frame->intensities.empty()) {
                     dynamic_intensities.push_back(frame->intensities[i]);
@@ -114,6 +120,13 @@ void DynamicBBoxRejection::insert_bounding_boxes(BoundingBox& bbox) {
     bbox.inflate(inflate_margin_);
     bboxes_.push_back(bbox);
     bbox_ages_.push_back(0);
+    last_removed_counts_.push_back(0);
+}
+
+void DynamicBBoxRejection::set_bounding_boxes(const std::vector<BoundingBox>& bboxes) {
+    bboxes_ = bboxes;
+    bbox_ages_.assign(bboxes_.size(), 0);
+    last_removed_counts_.assign(bboxes_.size(), 0);
 }
 
 std::vector<int> DynamicBBoxRejection::find_neighbors(const Eigen::Vector4d* points, const int num_points, const int k) const {
