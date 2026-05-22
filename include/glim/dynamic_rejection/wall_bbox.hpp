@@ -32,7 +32,8 @@ struct WallBBoxRegistryConfig {
     /// orientamenti molto diversi).
     double min_normal_dot;
     double max_center_distance;
-
+    double max_wall_thickness;
+    double max_duplicate_center_distance;
 
     WallBBoxRegistryConfig();
     ~WallBBoxRegistryConfig();    
@@ -74,7 +75,7 @@ public:
     void remove_expired(const std::vector<bool>& empty_bboxes);
 
     /// Svuota completamente il registro.
-    void clear() { registry_.clear(); missed_frames_.clear(); }
+    void clear() { registry_.clear(); missed_frames_.clear(); age_frames_.clear(); }
 
     /// Svuota il registro.
     // void clear();
@@ -103,12 +104,14 @@ private:
 
     static BoundingBox merge(const BoundingBox& existing,
                              const BoundingBox& incoming,
-                             double weight);
+                             double weight,
+                             double max_thickness = 0.0);
 
 private:
     WallBBoxRegistryConfig   config_;
     std::vector<BoundingBox> registry_;
     std::vector<int>         missed_frames_;  ///< contatore per expiry
+    std::vector<int>         age_frames_;     ///< frame da quando la bbox è stata aggiunta
 };
 
 }  // namespace glim

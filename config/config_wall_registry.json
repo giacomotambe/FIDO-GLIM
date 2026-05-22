@@ -5,7 +5,9 @@
         "enable_expiry": true,
         "max_missed_frames": 30,
         "min_normal_dot": 0.9,
-        "max_center_distance": 5.0
+        "max_center_distance": 5.0,
+        "max_wall_thickness": 0.5,
+        "max_duplicate_center_distance": 1.0
 
     }
 }

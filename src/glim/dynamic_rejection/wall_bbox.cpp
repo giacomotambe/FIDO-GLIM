@@ -13,8 +13,10 @@ WallBBoxRegistryConfig::WallBBoxRegistryConfig() {
     merge_weight     = config.param<double>("wall_registry", "merge_weight",     0.3);
     enable_expiry    = config.param<bool>  ("wall_registry", "enable_expiry",    false);
     max_missed_frames= config.param<int>   ("wall_registry", "max_missed_frames", 30);
-    min_normal_dot   = config.param<double>("wall_registry", "min_normal_dot",   0.9);
-    max_center_distance = config.param<double>("wall_registry", "max_center_distance", 5.0);
+    min_normal_dot               = config.param<double>("wall_registry", "min_normal_dot",               0.9);
+    max_center_distance          = config.param<double>("wall_registry", "max_center_distance",          5.0);
+    max_wall_thickness           = config.param<double>("wall_registry", "max_wall_thickness",           0.5);
+    max_duplicate_center_distance= config.param<double>("wall_registry", "max_duplicate_center_distance",1.0);
 
     spdlog::debug("[wall_registry] WallBBoxRegistryConfig: overlap_thresh={} merge_weight={} "
                   "enable_expiry={} max_missed_frames={}",
@@ -26,6 +28,7 @@ WallBBoxRegistry::WallBBoxRegistry(const WallBBoxRegistryConfig& config)
     : config_(config) {
         registry_.clear();
         missed_frames_.clear();
+        age_frames_.clear();
     }
 
 
@@ -41,6 +44,8 @@ void WallBBoxRegistry::update(const std::vector<BoundingBox>& new_bboxes , const
                   new_bboxes.size(), delta_pose.translation().x(), delta_pose.translation().y(), delta_pose.translation().z());
     
     transform_existing_bboxes(delta_pose);
+    for (auto& a : age_frames_) ++a;
+
     const int n_existing = static_cast<int>(registry_.size());
     std::vector<bool> matched(n_existing, false);
 
@@ -78,7 +83,7 @@ void WallBBoxRegistry::update(const std::vector<BoundingBox>& new_bboxes , const
             }
         }
         if (best_idx >= 0) {
-            registry_[best_idx] = merge(registry_[best_idx], incoming, config_.merge_weight);
+            registry_[best_idx] = merge(registry_[best_idx], incoming, config_.merge_weight, config_.max_wall_thickness);
             matched[best_idx]   = true;
             missed_frames_[best_idx] = 0;
             spdlog::debug("[wall_registry] merged bbox {}: IoU={:.3f}", best_idx, best_iou);
@@ -86,6 +91,7 @@ void WallBBoxRegistry::update(const std::vector<BoundingBox>& new_bboxes , const
         } else {
             registry_.push_back(incoming);
             missed_frames_.push_back(0);
+            age_frames_.push_back(0);
             spdlog::debug("[wall_registry] added new bbox (total={})", registry_.size());
         }
     }
@@ -101,6 +107,31 @@ void WallBBoxRegistry::update(const std::vector<BoundingBox>& new_bboxes , const
                 spdlog::debug("[wall_registry] expired bbox {}", i);
                 registry_.erase(registry_.begin() + i);
                 missed_frames_.erase(missed_frames_.begin() + i);
+                age_frames_.erase(age_frames_.begin() + i);
+            }
+        }
+    }
+
+    // Deduplication: se due muri hanno centri vicini, rimuovi il più vecchio.
+    // Itera dall'indice più alto per non invalidare gli indici precedenti.
+    if (config_.max_duplicate_center_distance > 0.0) {
+        const double dist2_thresh = config_.max_duplicate_center_distance
+                                  * config_.max_duplicate_center_distance;
+        for (int i = static_cast<int>(registry_.size()) - 1; i >= 1; --i) {
+            for (int j = i - 1; j >= 0; --j) {
+                const double d2 = (registry_[i].get_center() - registry_[j].get_center()).squaredNorm();
+                if (d2 < dist2_thresh) {
+                    // Rimuovi il più vecchio (age più alto)
+                    const int to_remove = (age_frames_[i] >= age_frames_[j]) ? i : j;
+                    spdlog::debug("[wall_registry] dedup: removing bbox {} (age={}) near bbox {} (age={})",
+                                  to_remove, age_frames_[to_remove],
+                                  (to_remove == i ? j : i),
+                                  (to_remove == i ? age_frames_[j] : age_frames_[i]));
+                    registry_.erase(registry_.begin() + to_remove);
+                    missed_frames_.erase(missed_frames_.begin() + to_remove);
+                    age_frames_.erase(age_frames_.begin() + to_remove);
+                    break;  // i è stato rimosso o l'indice è cambiato, esci dal loop interno
+                }
             }
         }
     }
@@ -211,7 +242,8 @@ void WallBBoxRegistry::transform_existing_bboxes(const Eigen::Isometry3d& delta_
 
 BoundingBox WallBBoxRegistry::merge(const BoundingBox& existing,
                                      const BoundingBox& incoming,
-                                     double weight)
+                                     double weight,
+                                     double max_thickness)
 {
     // Manteniamo il frame locale della bbox esistente (rotazione fissa)
     const Eigen::Matrix3d& R    = existing.get_rotation();
@@ -244,7 +276,16 @@ BoundingBox WallBBoxRegistry::merge(const BoundingBox& existing,
     }
 
     // Nuove dimensioni e centro nel mondo
-    const Eigen::Vector3d new_size   = local_max - local_min;
+    Eigen::Vector3d new_size = local_max - local_min;
+
+    // Clamp thickness (asse 0 = normale al muro)
+    if (max_thickness > 0.0 && new_size[0] > max_thickness) {
+        const double excess = new_size[0] - max_thickness;
+        local_min[0] += excess * 0.5;
+        local_max[0] -= excess * 0.5;
+        new_size[0] = max_thickness;
+    }
+
     const Eigen::Vector3d new_center = c_ex + R * (0.5 * (local_max + local_min));
 
     return BoundingBox(new_size, new_center, R);
@@ -347,6 +388,7 @@ void WallBBoxRegistry::remove_expired(const std::vector<bool>& empty_bboxes) {
             spdlog::debug("[wall_registry] clearing empty bbox {}", i);
             registry_.erase(registry_.begin() + i);
             missed_frames_.erase(missed_frames_.begin() + i);
+            age_frames_.erase(age_frames_.begin() + i);
         }
     }
 } 

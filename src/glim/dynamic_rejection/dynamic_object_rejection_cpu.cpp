@@ -57,8 +57,13 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     points_limit                  = config.param<double>("dynamic_object_rejection", "points_limit",                  0.25);
     cluster_propagation_threshold = config.param<double>("dynamic_object_rejection", "cluster_propagation_threshold", 0.5);
     motion_threshold_scale        = config.param<double>("dynamic_object_rejection", "motion_threshold_scale",        0.5);
+    rotation_threshold_scale      = config.param<double>("dynamic_object_rejection", "rotation_threshold_scale",      0.0);
     min_shift_m                   = config.param<double>("dynamic_object_rejection", "min_shift_m",                   0.10);
     cluster_motion_scale          = config.param<double>("dynamic_object_rejection", "cluster_motion_scale",          1.0);
+    cluster_rotation_scale        = config.param<double>("dynamic_object_rejection", "cluster_rotation_scale",        0.0);
+    w_distance                    = config.param<double>("dynamic_object_rejection", "w_distance",                    0.0);
+    w_velocity                    = config.param<double>("dynamic_object_rejection", "w_velocity",                    0.0);
+    velocity_static_threshold     = config.param<double>("dynamic_object_rejection", "velocity_static_threshold",     0.1);
 
     spdlog::debug("[dynamic_rejection] params loaded");
 }
@@ -125,7 +130,10 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     last_pose_ = cur_pose;
 
     const double robot_translation = T_delta_pose.translation().norm();
-    motion_scale_ = 1.0 + params_.motion_threshold_scale * robot_translation;
+    const double robot_rotation    = Eigen::AngleAxisd(T_delta_pose.rotation()).angle();
+    translation_scale_ = params_.motion_threshold_scale    * robot_translation;
+    rotation_scale_    = params_.rotation_threshold_scale  * robot_rotation;
+    motion_scale_      = 1.0 + translation_scale_ + rotation_scale_;
 
     spdlog::debug("[dynamic_rejection] delta pose since last frame: translation=({:.4f},{:.4f},{:.4f}) motion_scale={:.3f}",
         T_delta_pose.translation().x(), T_delta_pose.translation().y(), T_delta_pose.translation().z(),
@@ -248,9 +256,10 @@ void DynamicObjectRejectionCPU::score_voxels(
         // Dynamic-wins policy: scan ALL clusters before scoring.
         // If a voxel overlaps both a static bbox (tree) and a dynamic bbox (person),
         // the dynamic match takes priority so the static one cannot mask it.
-        bool in_any_bbox          = false;
-        bool in_any_dynamic_bbox  = false;
-        bool possibly_dynamic     = false;
+        bool   in_any_bbox          = false;
+        bool   in_any_dynamic_bbox  = false;
+        bool   possibly_dynamic     = false;
+        double best_cluster_speed   = 0.0;
 
         for (int c = 0; c < n_clusters; ++c) {
             const bool in_base = cluster_bboxes[c].contains(cur.mean);
@@ -258,10 +267,10 @@ void DynamicObjectRejectionCPU::score_voxels(
                 cluster_bboxes[c].contains_inflated(cur.mean, inflate_params_);
             if (!(in_base || in_inflated)) continue;
             in_any_bbox = true;
-            if (cluster_bboxes[c].is_dynamic_bbox()) {
+            if (cluster_bboxes[c].is_dynamic_bbox())
                 in_any_dynamic_bbox = true;
-                break;   // found a dynamic cluster — no need to keep scanning
-            }
+            const double spd = cluster_bboxes[c].get_velocity().norm();
+            if (spd > best_cluster_speed) best_cluster_speed = spd;
         }
         // Score: dynamic-wins. The static penalty only applies when NO dynamic cluster contains this voxel.
         if (in_any_dynamic_bbox) {
@@ -270,6 +279,8 @@ void DynamicObjectRejectionCPU::score_voxels(
         } else {
             cur.dynamic_score -= params_.w_cluster * 0.5;  // static cluster or outside all clusters
         }
+        if (params_.w_velocity > 0.0 && in_any_bbox)
+            cur.dynamic_score += params_.w_velocity * (best_cluster_speed - params_.velocity_static_threshold);
 
         // ---- Transform centroid into previous frame ----
         const Eigen::Vector3d p_trans  = T_delta_pose * cur.mean.head<3>();
@@ -377,6 +388,11 @@ void DynamicObjectRejectionCPU::score_voxels(
 
             const double static_ratio = static_cast<double>(static_count) / hist_depth;
             cur.dynamic_score -= params_.w_history * static_ratio;
+        }
+
+        // ---- Distance penalty (sopprime falsi positivi lontani dall'origine) ----
+        if (params_.w_distance > 0.0) {
+            cur.dynamic_score -= params_.w_distance * cur.mean.head<3>().norm();
         }
 
         // ---- Threshold (three-tier, cluster-gated with dynamic memory) ----
@@ -493,7 +509,9 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     // Scale the propagation threshold by motion_scale_^cluster_motion_scale so that
     // a larger fraction of a cluster's voxels must score dynamic during robot movement.
     const double eff_prop_threshold =
-        params_.cluster_propagation_threshold * std::pow(motion_scale_, params_.cluster_motion_scale);
+        params_.cluster_propagation_threshold
+        * std::pow(1.0 + translation_scale_, params_.cluster_motion_scale)
+        * std::pow(1.0 + rotation_scale_,    params_.cluster_rotation_scale);
 
     std::vector<bool> cluster_is_dynamic(n_clusters, false);
     for (int c = 0; c < n_clusters; ++c) {

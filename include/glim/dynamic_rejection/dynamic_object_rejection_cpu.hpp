@@ -39,9 +39,14 @@ public:
     // Cluster propagation
     double cluster_propagation_threshold;
     // Motion-adaptive threshold
-    double motion_threshold_scale;      ///< Threshold multiplier per meter of robot translation. Higher = less sensitive while moving.
+    double motion_threshold_scale;          ///< Threshold multiplier per meter of robot translation. Higher = less sensitive while moving.
+    double rotation_threshold_scale;        ///< Threshold multiplier per radian of robot rotation. Higher = less sensitive while rotating.
     double min_shift_m;                 ///< Dead zone: centroid shifts below this value [m] contribute 0 to the score. Absorbs voxel-grid quantization artifacts.
-    double cluster_motion_scale;        ///< Scales cluster_propagation_threshold by motion_scale_^cluster_motion_scale. Higher = harder to trigger a cluster during movement.
+    double cluster_motion_scale;          ///< Scales cluster_propagation_threshold by (1+translation_scale)^cluster_motion_scale.
+    double cluster_rotation_scale;        ///< Scales cluster_propagation_threshold by (1+rotation_scale)^cluster_rotation_scale.
+    double w_distance;                  ///< Negative weight on voxel distance from origin. Score -= w_distance * dist. Suppresses far-range false positives.
+    double w_velocity;                  ///< Weight on cluster EMA speed. Score += w_velocity * (speed - threshold). Positive above threshold, negative below.
+    double velocity_static_threshold;   ///< Speed [m/s] below which the cluster is treated as static (score contribution becomes negative).
     // Misc
     int num_threads;
 };
@@ -204,7 +209,9 @@ private:
 
     std::vector<BoundingBox> last_cluster_bboxes_;
 
-    double motion_scale_ = 1.0;  ///< Current-frame motion scale factor, updated in reject().
+    double motion_scale_      = 1.0;  ///< Combined scale (translation + rotation), used for per-voxel threshold.
+    double translation_scale_ = 0.0;  ///< params_.motion_threshold_scale    * robot_translation this frame.
+    double rotation_scale_    = 0.0;  ///< params_.rotation_threshold_scale  * robot_rotation    this frame.
     VelocityInflationParams inflate_params_;  ///< Shared with BBOX mode, loaded from config_bbox_rejection.json.
 };
 
