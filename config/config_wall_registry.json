@@ -3,11 +3,11 @@
         "overlap_threshold": 0.3,
         "merge_weight": 0.3,
         "enable_expiry": true,
-        "max_missed_frames": 30,
+        "max_missed_frames": 5,
         "min_normal_dot": 0.9,
         "max_center_distance": 5.0,
-        "max_wall_thickness": 0.5,
-        "max_duplicate_center_distance": 1.0
+        "max_wall_thickness": 0.9,
+        "max_duplicate_center_distance": 2.0
 
     }
 }

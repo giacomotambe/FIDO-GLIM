@@ -1,17 +1,18 @@
 {
   "param_bbox_rejection": {
-    "inflate_margin":                  0.0,
+    "inflate_margin": 0.4,
+    "max_bbox_frames": 10,
     "bbox_potentially_dynamic_min_track_age": 5,
-    "bbox_static_min_track_age":       8,
-    "bbox_min_static_velocity":        0.1,
+    "bbox_static_min_track_age": 15,
+    "bbox_min_static_velocity": 0.1,
     "bbox_rejection_obstacle_min_removed_points": 3,
-    "velocity_inflation_k":            2.5,
-    "reverse_velocity_inflation_k":    0.35,
-    "rear_inflation_k":                0.35,
-    "lateral_inflation_k":             0.50,
-    "vertical_inflation_k":            0.20,
-    "velocity_inflation_min":          0.05,
-    "velocity_inflation_max_speed":    5.0,
-    "ellipse_box_cover_scale":         1.41421356237
+    "velocity_inflation_k": 0.85,
+    "reverse_velocity_inflation_k": 0.35,
+    "rear_inflation_k": 0.15,
+    "lateral_inflation_k": 0.30,
+    "vertical_inflation_k": 0.20,
+    "velocity_inflation_min": 0.1,
+    "velocity_inflation_max_speed": 3.0,
+    "ellipse_box_cover_scale": 1.41421356237
   }
 }

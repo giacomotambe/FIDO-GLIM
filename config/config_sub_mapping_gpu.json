@@ -33,11 +33,11 @@
     "enable_imu": true,
     "enable_optimization": false,
     // Keyframe update strategy
-    "max_num_keyframes": 15,
-    "keyframe_update_strategy": "OVERLAP",
+    "max_num_keyframes": 40,
+    "keyframe_update_strategy": "DISPLACEMENT",
     "keyframe_update_min_points": 500,
-    "keyframe_update_interval_rot": 3.14,
-    "keyframe_update_interval_trans": 1.0,
+    "keyframe_update_interval_rot": 0.5,
+    "keyframe_update_interval_trans": 0.5,
     "max_keyframe_overlap": 0.6,
     // Relative pose factors
     "create_between_factors": false,
@@ -45,7 +45,7 @@
     // Registration error factors
     "registration_error_factor_type": "VGICP_GPU",
     "keyframe_randomsampling_rate": 1.0,
-    "keyframe_voxel_resolution": 0.25,
+    "keyframe_voxel_resolution": 0.1,
     "keyframe_voxelmap_levels": 2,
     "keyframe_voxelmap_scaling_factor": 2.0,
     // Post processing

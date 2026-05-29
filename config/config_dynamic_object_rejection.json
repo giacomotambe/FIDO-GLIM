@@ -1,18 +1,28 @@
 {
   "dynamic_object_rejection": {
-    "dynamic_score_threshold": 0.40,
+    "dynamic_score_threshold": 0.08,
     "tier1_threshold_factor": 0.55,
     "unconstrained_threshold_factor": 3.0,
     "memory_threshold_factor": 0.70,
     "num_threads": 4,
-    "w_shift": 1.0,
+    "w_shift": 1.2,
     "w_mahalanobis": 0.0,
-    "w_cluster": 0.2,
-    "w_history": 0.1,
+    "w_cluster": 0.0,
+    "w_history": 0.3,
+    "w_history_dynamic": 0.2,
     "frame_num_memory": 5,
-    "w_neighbor": 0.1,
-    "points_limit": 0.3,
-    "dynamic_cluster_ratio": 0.4,
-    "cluster_propagation_threshold": 0.3
+    "history_factor": 0.3,
+    "w_neighbor": 0.2,
+    "points_limit": 0.05,
+    "dynamic_cluster_ratio": 0.3,
+    "cluster_propagation_threshold": 0.3,
+    "motion_threshold_scale": 0.8,
+    "rotation_threshold_scale": 2.2,
+    "min_shift_m": 0.03,
+    "cluster_motion_scale": 2.0,
+    "cluster_rotation_scale": 3.0,
+    "w_distance": 0.16,
+    "w_velocity": 0.0,
+    "velocity_static_threshold": 0.0
   }
 }

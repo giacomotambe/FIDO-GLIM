@@ -1,58 +1,39 @@
 {
   "dynamic_cluster_extractor": {
-
     "_comment_dbscan": "=== DBSCAN — voxel_resolution=0.25m, eps = eps_voxel_factor * 0.25 ===",
-    "eps_voxel_factor":    1.2,
-    "min_pts":             2,
-    "knn_max_neighbors":   32,
-    "min_cluster_voxels":  3,
-    "min_points_for_bbox": 10,
+    "eps_voxel_factor": 1.5,
+    "min_pts": 2,
+    "knn_max_neighbors": 32,
+    "min_cluster_voxels": 3,
+    "min_points_for_bbox": 3,
 
     "_comment_bbox": "=== Bounding-box dimensional pre-filter ===",
     "bbox_min_extent": 0.1,
-    "bbox_max_extent": 3.0,
-    "bbox_min_volume": 0.005,
-    "bbox_max_volume": 6.0,
+    "bbox_max_extent": 4.0,
+    "bbox_min_volume": 0.0001,
+    "bbox_max_volume": 1000.0,
 
-    "_comment_classify": "=== History-based static classification ===",
-    "cluster_iou_threshold":      0.2,
-    "cluster_distance_threshold": 0.3,
-    "history_size":               5,
-    "min_static_history_matches": 2,
-    "static_history_ratio":       0.5,
+    "_comment_nms": "=== NMS (non-maximum suppression) ===",
+    "cluster_iou_threshold": 0.1,
 
-    "_comment_containment": "=== Containment-based bbox merging ===",
-    "containment_margin": 0.2,
-    "merge_volume_ratio": 1.5,
     "_comment_peer_merge": "=== Peer merging: fonde bbox vicine in una sola più grande. 0=disabilitato ===",
-    "peer_merge_distance": 0.0,
+    
+    "peer_merge_distance_outdoor": 2.8,
+    "peer_merge_distance_indoor": 0.01,
 
     "_comment_tracking": "=== Cluster tracking ===",
-    "track_match_distance":        1.5,
-    "track_match_distance_strict": 0.5,
-    "track_match_iou":             0.2,
-    "track_max_missed":            5,
+    "track_match_distance": 2.0,
+    "track_match_iou": 0.05,
+    "track_max_missed": 5,
 
-    "_comment_hysteresis": "=== Hysteresis (dynamic_n frames to go static→dynamic; static_m to go dynamic→static) ===",
-    "hysteresis_dynamic_n": 3,
-    "hysteresis_static_m":  5,
+    "_comment_hysteresis": "=== Hysteresis: bbox flagged dynamic only after this many consecutive confirmed-dynamic frames ===",
+    "min_dynamic_frames": 2,
 
-    "_comment_velocity": "=== Velocity-based classification ===",
-    "_comment_velocity2": "velocity_beta: LP smoothing for velocity (0=instant, 1=frozen).",
-    "_comment_velocity3": "motion_scale_factor: thresholds scale = 1 + factor * ||ego_motion||.",
-    "velocity_beta":              0.8,
-    "velocity_static_threshold":  0.03,
-    "velocity_static_frames":     3,
-    "velocity_dynamic_threshold": 0.15,
-    "motion_scale_factor":        2.0,
-
-    "_comment_ema": "=== EMA dynamic score ===",
-    "ema_alpha":               0.8,
-    "dynamic_score_threshold": 0.5,
-    "min_track_age":           3,
+    "_comment_permanent": "=== Permanent state: lock track after N consecutive frames in same state (0 = disabled) ===",
+    "permanent_dynamic_frames": 8,
+    "permanent_static_frames": 20,
 
     "_comment_history": "=== Historical bbox check: past-frame bboxes of confirmed-dynamic tracks used in contains_inflated ===",
     "track_bbox_history_size": 5
-
   }
 }

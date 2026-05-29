@@ -32,7 +32,6 @@
   // keyframe_delta_(trans|rot)  : Keyframe displacement threshold [m / rad]
   //
   // --- MISC ---
-  // validate_imu                 : If true, perform IMU validation and log the validation results
   // save_imu_rate_trajectory     : If true, save the IMU rate trajectory
   // num_threads                  : Number of threads for odometry estimation
   */
@@ -49,24 +48,23 @@
     "isam2_relinearize_thresh": 0.1,
     "fix_imu_bias": false,
     // Voxel params
-    "voxel_resolution": 0.25,
-    "voxel_resolution_max": 0.5,
+    "voxel_resolution": 0.1,
+    "voxel_resolution_max": 0.2,
     "voxel_resolution_dmin": 5.0,
     "voxel_resolution_dmax": 20.0,
-    "voxelmap_levels": 2,
+    "voxelmap_levels": 3,
     "voxelmap_scaling_factor": 2.0,
     "full_connection_window_size": 2,
     // Keyframe params
-    "keyframe_update_strategy": "OVERLAP",
+    "keyframe_update_strategy": "DISPLACEMENT",
     "max_num_keyframes": 15,
     "keyframe_min_overlap": 0.01,
-    "keyframe_max_overlap": 0.7,
-    "keyframe_delta_trans": 2.0,
+    "keyframe_max_overlap": 0.5,
+    "keyframe_delta_trans": 1.0,
     "keyframe_delta_rot": 0.5,
     "keyframe_entropy_thresh": 0.99,
     // MISC
-    "validate_imu": true,
     "save_imu_rate_trajectory": true,
-    "num_threads": 2
+    "num_threads": 5
   }
 }

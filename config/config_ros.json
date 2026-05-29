@@ -37,12 +37,12 @@
     "keep_raw_points": false,
     // IMU config
     "imu_time_offset": 0.0,
-    "points_time_offset": 1.0,
+    "points_time_offset": 0.0,
     "acc_scale": 1.0,
     // TF config
     "imu_frame_id": "imu_link",
     "lidar_frame_id": "velodyne",
-    "base_frame_id": "",
+    "base_frame_id": "base_link",
     "odom_frame_id": "odom",
     "map_frame_id": "map",
     "publish_imu2lidar": false,  
@@ -52,34 +52,16 @@
       "libmemory_monitor.so",
       "libstandard_viewer.so",
       "librviz_viewer.so"
-      // "libdynamic_rejection_viewer.so"
-      // "libimu_validator.so"
     ],
     // Topics
+    
+    "bbox_topic": "/onboard_detector/tracked_dynamic_obstacles",
     "imu_topic": "/imu/data",
     "points_topic": "/velodyne_points",
-    "image_topic": "/camera1/rs1/color/image_raw",
-    "bbox_topic": "/bounding_boxes",
+    "image_topic": "/camera/image/compressed",
 
+    "dynamic_rejection_type": "NONE", // "NONE", "CLUSTER", "BBOX" or "COMBINED"
+    "env_type": "INDOOR" // "INDOOR" or "OUTDOOR"
 
-    // Dynamic rejection type
-    "dynamic_rejection_type": "VOXEL", // "BBOX" / "VOXEL" / "NONE"
-
-    "env_type": "OUTDOOR", // "INDOOR" / "OUTDOOR" (used for peer merging distance)
-
-    // "imu_topic": "/imu/data",
-    // "points_topic": "/velodyne_points/points",
-    // "image_topic": "/camera/image",
-    
-    // QoS options
-   "imu_qos": {
-      "reliability": "reliable"
-    },
-    "points_qos": {
-      "reliability": "reliable"
-    },
-    "image_qos": {
-      "reliability": "reliable"
-    }
   }
 }
