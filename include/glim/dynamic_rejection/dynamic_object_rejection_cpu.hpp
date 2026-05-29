@@ -119,9 +119,10 @@ public:
      * @return             DynamicRejectionResult{static_frame, dynamic_frame, voxelmap}.
      */
     DynamicRejectionResult reject(
-        const WallFilterResult&       wf_result,
-        const PreprocessedFrame::Ptr& source_frame,
-        std::vector<BoundingBox>& cluster_bboxes);
+        const WallFilterResult&         wf_result,
+        const PreprocessedFrame::Ptr&   source_frame,
+        std::vector<BoundingBox>&       cluster_bboxes,
+        const std::vector<BoundingBox>& historical_bboxes = {});
 
     // -----------------------------------------------------------------------
     // Accessors
@@ -155,8 +156,12 @@ private:
         gtsam_points::DynamicVoxelMapCPU& voxelmap, int nvox);
     
     /// If a percentage of voxels in a cluster are dynamic, mark the whole cluster as dynamic.
+    /// historical_bboxes: past-frame bboxes of confirmed-dynamic tracks (current sensor frame),
+    /// used for an additional contains / contains_inflated check for voxels outside all cluster bboxes.
     void propagate_to_clusters(
-        gtsam_points::DynamicVoxelMapCPU& voxelmap, std::vector<BoundingBox>& cluster_bboxes);   
+        gtsam_points::DynamicVoxelMapCPU& voxelmap,
+        std::vector<BoundingBox>&         cluster_bboxes,
+        const std::vector<BoundingBox>&   historical_bboxes = {});
 
     /// Iterate all voxels and append their raw points to the appropriate bucket.
     void collect_points(

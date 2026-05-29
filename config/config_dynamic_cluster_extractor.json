@@ -49,7 +49,10 @@
     "_comment_ema": "=== EMA dynamic score ===",
     "ema_alpha":               0.8,
     "dynamic_score_threshold": 0.5,
-    "min_track_age":           3
+    "min_track_age":           3,
+
+    "_comment_history": "=== Historical bbox check: past-frame bboxes of confirmed-dynamic tracks used in contains_inflated ===",
+    "track_bbox_history_size": 5
 
   }
 }

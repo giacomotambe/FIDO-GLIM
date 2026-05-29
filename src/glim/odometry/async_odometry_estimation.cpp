@@ -1,5 +1,6 @@
 #include <glim/odometry/async_odometry_estimation.hpp>
 
+#include <chrono>
 #include <spdlog/spdlog.h>
 #include <glim/util/logging.hpp>
 
@@ -58,6 +59,10 @@ void AsyncOdometryEstimation::run() {
   std::deque<std::pair<double, cv::Mat>> images;
 #endif
   std::deque<PreprocessedFrame::Ptr> raw_frames;
+
+  constexpr int kPrintEvery = 30;
+  double sum_odom = 0.0;
+  int odom_frame_count = 0;
 
   while (!kill_switch) {
     auto imu_frames = input_imu_queue.get_all_and_clear();
@@ -125,7 +130,18 @@ void AsyncOdometryEstimation::run() {
 
       const auto& frame = raw_frames.front();
       std::vector<EstimationFrame::ConstPtr> marginalized;
+
+      const auto t0 = std::chrono::steady_clock::now();
       auto state = odometry_estimation->insert_frame(frame, marginalized);
+      const double dt_odom = std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - t0).count();
+
+      sum_odom += dt_odom;
+      ++odom_frame_count;
+      if (odom_frame_count % kPrintEvery == 0) {
+        logger->debug("[GLIM avg/{}f] odometry={:.1f}ms",
+            odom_frame_count, sum_odom / odom_frame_count);
+      }
 
       if (state) {
         output_estimation_results.push_back(state);

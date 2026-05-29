@@ -62,6 +62,7 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     min_dynamic_frames        = config.param<int>("dynamic_cluster_extractor", "min_dynamic_frames",        3);
     permanent_dynamic_frames  = config.param<int>("dynamic_cluster_extractor", "permanent_dynamic_frames",  10);
     permanent_static_frames   = config.param<int>("dynamic_cluster_extractor", "permanent_static_frames",   10);
+    track_bbox_history_size   = config.param<int>("dynamic_cluster_extractor", "track_bbox_history_size",   5);
 
     spdlog::debug("[cluster_extractor] eps_factor={:.2f} min_pts={} knn_max={} "
                   "min_cluster_voxels={} min_points_bbox={} "
@@ -564,10 +565,12 @@ void DynamicClusterExtractor::update_tracks(
     const int N_tracks = static_cast<int>(tracks_.size());
     const int N_bboxes = static_cast<int>(bboxes.size());
 
-    // Transform track centers into current sensor frame.
-    for (auto& t : tracks_){
+    // Transform track centers and all history into current sensor frame.
+    for (auto& t : tracks_) {
         t.center = T_to_current * t.center;
         t.last_bbox.transform(T_to_current);
+        for (auto& hbbox : t.bbox_history)
+            hbbox.transform(T_to_current);
     }
         
 
@@ -609,6 +612,13 @@ void DynamicClusterExtractor::update_tracks(
             t.velocity = 0.6 * (T_to_current.rotation() * t.velocity) + 0.4 * vel_meas;
         }
         bboxes[p.b_idx].set_velocity(t.velocity);
+
+        // Push previous bbox (already in current frame) to history before overwriting.
+        if (params_.track_bbox_history_size > 0) {
+            t.bbox_history.push_back(t.last_bbox);
+            while (static_cast<int>(t.bbox_history.size()) > params_.track_bbox_history_size)
+                t.bbox_history.pop_front();
+        }
 
         t.center        = bboxes[p.b_idx].get_center();
         // Permanent state overrides the hysteresis counter.
@@ -714,12 +724,12 @@ void DynamicClusterExtractor::update_dynamic_feedback(
         if (params_.permanent_dynamic_frames > 0 &&
             track.dynamic_frames >= params_.permanent_dynamic_frames) {
             track.permanent_state = PermanentState::DYNAMIC;
-            spdlog::info("[tracker] track={} -> PERMANENTLY DYNAMIC (age={})",
+            spdlog::debug("[tracker] track={} -> PERMANENTLY DYNAMIC (age={})",
                          track.id, track.age);
         } else if (params_.permanent_static_frames > 0 &&
                    track.static_frames >= params_.permanent_static_frames) {
             track.permanent_state = PermanentState::STATIC;
-            spdlog::info("[tracker] track={} -> PERMANENTLY STATIC (age={})",
+            spdlog::debug("[tracker] track={} -> PERMANENTLY STATIC (age={})",
                          track.id, track.age);
         }
 
@@ -729,6 +739,25 @@ void DynamicClusterExtractor::update_dynamic_feedback(
                       : track.permanent_state == PermanentState::DYNAMIC ? "DYNAMIC"
                                                                           : "STATIC");
     }
+}
+
+// ===========================================================================
+// get_dynamic_track_history()
+// ===========================================================================
+
+std::vector<BoundingBox> DynamicClusterExtractor::get_dynamic_track_history() const {
+    std::vector<BoundingBox> result;
+    for (const auto& t : tracks_) {
+        if (t.bbox_history.empty()) continue;
+        const bool is_confirmed =
+            (t.permanent_state == PermanentState::DYNAMIC) ||
+            (t.permanent_state == PermanentState::NONE && t.dynamic_frames >= params_.min_dynamic_frames);
+        if (!is_confirmed) continue;
+        for (const auto& hbbox : t.bbox_history)
+            result.push_back(hbbox);
+    }
+    spdlog::debug("[cluster_extractor] get_dynamic_track_history: {} historical bboxes", result.size());
+    return result;
 }
 
 } // namespace glim

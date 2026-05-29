@@ -66,6 +66,10 @@ std::vector<std::deque<std::vector<BoundingBox>>> AsyncDynamicObjectRejection::g
 void AsyncDynamicObjectRejection::run() {
     spdlog::debug("[dynamic_rejection][async] thread started");
 
+    constexpr int kPrintEvery = 30;
+    double sum_wall = 0.0, sum_cluster = 0.0, sum_reject = 0.0, sum_total = 0.0;
+    int frame_count = 0;
+
     while (!kill_switch) {
         auto frames = input_frame_queue.get_all_and_clear();
 
@@ -81,32 +85,35 @@ void AsyncDynamicObjectRejection::run() {
                         return std::chrono::duration_cast<ms>(std::chrono::steady_clock::now() - t0).count();
                     };
         for (const auto& frame : frames) {
-            // Helper to compute elapsed milliseconds since a time_point
-            
             // ------------------------------------------------------------------
             // Step 1: WallFilter — voxelize + mark wall voxels
             // ------------------------------------------------------------------
             auto t_wall = std::chrono::steady_clock::now();
             const WallFilterResult wf = wall_filter_->filter(*frame);
-            spdlog::debug("[PERF] wall_filter      {:.1f} ms  ({} vox)", T(t_wall), wf.num_total_voxels);
+            const double dt_wall = T(t_wall);
+            spdlog::debug("[PERF] wall_filter      {:.1f} ms  ({} vox)", dt_wall, wf.num_total_voxels);
 
 
             std::vector<glim::BoundingBox> cluster_bboxes;
 
 
             auto t_cluster = std::chrono::steady_clock::now();
+            std::vector<glim::BoundingBox> historical_bboxes;
             if (cluster_extractor_ && wf.voxelmap) {
                 cluster_bboxes = cluster_extractor_->extract_clusters(wf.voxelmap, frame->stamp);
-                spdlog::debug("[dynamic_rejection][async] cluster_bboxes size={}", cluster_bboxes.size());
+                historical_bboxes = cluster_extractor_->get_dynamic_track_history();
+                spdlog::debug("[dynamic_rejection][async] cluster_bboxes size={} history size={}",
+                              cluster_bboxes.size(), historical_bboxes.size());
             }
-            spdlog::debug("[PERF] cluster_extract  {:.1f} ms  ({} bbox)", T(t_cluster), cluster_bboxes.size());
+            const double dt_cluster = T(t_cluster);
+            spdlog::debug("[PERF] cluster_extract  {:.1f} ms  ({} bbox)", dt_cluster, cluster_bboxes.size());
 
             // ------------------------------------------------------------------
             // Step 2: DynamicObjectRejection — score non-wall voxels
             // ------------------------------------------------------------------
             auto t_reject = std::chrono::steady_clock::now();
             const DynamicRejectionResult dr =
-                dynamic_rejection_->reject(wf, frame, cluster_bboxes);
+                dynamic_rejection_->reject(wf, frame, cluster_bboxes, historical_bboxes);
 
             // Feed propagate_to_clusters() results back to the tracker so the
             // hysteresis counter (dynamic_frames) reflects confirmed dynamic detections.
@@ -114,9 +121,27 @@ void AsyncDynamicObjectRejection::run() {
                 cluster_extractor_->update_dynamic_feedback(cluster_bboxes);
             }
 
-            spdlog::debug("[PERF] reject           {:.1f} ms", T(t_reject));
+            const double dt_reject = T(t_reject);
+            const double dt_total  = T(t_wall);
+            spdlog::debug("[PERF] reject           {:.1f} ms", dt_reject);
+            spdlog::debug("[PERF] TOTAL FRAME      {:.1f} ms", dt_total);
 
-            spdlog::debug("[PERF] TOTAL FRAME      {:.1f} ms", T(t_wall));
+            // ------------------------------------------------------------------
+            // Media cumulativa sull'intero bag — stampa ogni kPrintEvery frame
+            // ------------------------------------------------------------------
+            sum_wall    += dt_wall;
+            sum_cluster += dt_cluster;
+            sum_reject  += dt_reject;
+            sum_total   += dt_total;
+            ++frame_count;
+            if (frame_count % kPrintEvery == 0) {
+                spdlog::debug("[VOXEL avg/{}f] wall={:.1f}ms  cluster={:.1f}ms  reject={:.1f}ms  TOTAL={:.1f}ms",
+                    frame_count,
+                    sum_wall    / frame_count,
+                    sum_cluster / frame_count,
+                    sum_reject  / frame_count,
+                    sum_total   / frame_count);
+            }
             // ------------------------------------------------------------------
             // Enqueue outputs
             // ------------------------------------------------------------------

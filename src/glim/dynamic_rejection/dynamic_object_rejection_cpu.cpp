@@ -99,9 +99,10 @@ DynamicObjectRejectionCPU::DynamicObjectRejectionCPU(
 // ===========================================================================
 
 DynamicRejectionResult DynamicObjectRejectionCPU::reject(
-    const WallFilterResult&       wf_result,
-    const PreprocessedFrame::Ptr& source_frame,
-    std::vector<BoundingBox>& cluster_bboxes)
+    const WallFilterResult&         wf_result,
+    const PreprocessedFrame::Ptr&   source_frame,
+    std::vector<BoundingBox>&       cluster_bboxes,
+    const std::vector<BoundingBox>& historical_bboxes)
 {
     spdlog::debug("[dynamic_rejection] reject begin: voxelmap={} wall_voxels={}/{}",
         static_cast<bool>(wf_result.voxelmap),
@@ -150,7 +151,7 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
 
     const int nvox = nvox_of(*wf_result.voxelmap);
     propagate_to_neighbors(*wf_result.voxelmap, nvox);
-    propagate_to_clusters(*wf_result.voxelmap, cluster_bboxes);
+    propagate_to_clusters(*wf_result.voxelmap, cluster_bboxes, historical_bboxes);
 
     // -----------------------------------------------------------------------
     // Split voxel points into static / dynamic buckets
@@ -478,7 +479,8 @@ void DynamicObjectRejectionCPU::propagate_to_neighbors(
 
 void DynamicObjectRejectionCPU::propagate_to_clusters(
     gtsam_points::DynamicVoxelMapCPU& voxelmap,
-    std::vector<BoundingBox>& cluster_bboxes)
+    std::vector<BoundingBox>&         cluster_bboxes,
+    const std::vector<BoundingBox>&   historical_bboxes)
 {
     if (cluster_bboxes.empty()) return;
 
@@ -513,6 +515,13 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         * std::pow(1.0 + translation_scale_, params_.cluster_motion_scale)
         * std::pow(1.0 + rotation_scale_,    params_.cluster_rotation_scale);
 
+    // Save hysteresis-gated state BEFORE computing the current-frame ratio.
+    // Voxel assignment uses was_dynamic (confirmed via min_dynamic_frames), not the
+    // raw ratio, so a single noisy frame cannot remove a static cluster's points.
+    std::vector<bool> was_dynamic(n_clusters);
+    for (int c = 0; c < n_clusters; ++c)
+        was_dynamic[c] = cluster_bboxes[c].is_dynamic_bbox();
+
     std::vector<bool> cluster_is_dynamic(n_clusters, false);
     for (int c = 0; c < n_clusters; ++c) {
         if (total_count[c] == 0) continue;
@@ -527,29 +536,31 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
 
         const double ratio = static_cast<double>(dynamic_count[c]) / total_count[c];
         cluster_is_dynamic[c] = (ratio > eff_prop_threshold);
-        cluster_bboxes[c].set_dynamic(cluster_is_dynamic[c]);
-        spdlog::debug("[dynamic_rejection] cluster {}: {}/{} dynamic ({:.1f}%) threshold={:.2f} -> {}",
+        cluster_bboxes[c].set_dynamic(cluster_is_dynamic[c]);  // Update bbox for update_dynamic_feedback().
+        spdlog::debug("[dynamic_rejection] cluster {}: {}/{} dynamic ({:.1f}%) threshold={:.2f} -> {} (was {})",
                       c, dynamic_count[c], total_count[c], ratio * 100.0, eff_prop_threshold,
-                      cluster_is_dynamic[c] ? "DYNAMIC" : "static");
+                      cluster_is_dynamic[c] ? "DYNAMIC" : "static",
+                      was_dynamic[c]        ? "DYNAMIC" : "static");
     }
 
-    // Pre-collect dynamic cluster indices to avoid re-scanning all clusters per voxel.
+    // Inflated zone only activates for clusters confirmed dynamic via hysteresis.
     std::vector<int> dynamic_cluster_ids;
     for (int c = 0; c < n_clusters; ++c)
-        if (cluster_is_dynamic[c]) dynamic_cluster_ids.push_back(c);
+        if (was_dynamic[c]) dynamic_cluster_ids.push_back(c);
 
     for (int j = 0; j < nvox; ++j) {
         auto& v = voxelmap.lookup_voxel(j);
         if (v.is_wall) continue;
 
-        // Scan ALL clusters: dynamic-wins — if ANY containing cluster is confirmed
-        // dynamic this frame, the voxel is dynamic regardless of overlapping static clusters.
+        // Use was_dynamic (hysteresis-gated) for voxel assignment.
+        // Dynamic-wins: if ANY containing cluster was confirmed dynamic last frame,
+        // the voxel is dynamic regardless of overlapping static clusters.
         bool in_any     = false;
         bool in_dynamic = false;
         for (int c = 0; c < n_clusters; ++c) {
             if (!cluster_bboxes[c].contains(v.mean)) continue;
             in_any = true;
-            if (cluster_is_dynamic[c]) { in_dynamic = true; break; }
+            if (was_dynamic[c]) { in_dynamic = true; break; }
         }
 
         if (in_any) {
@@ -561,6 +572,15 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
                 if (cluster_bboxes[dc].contains_inflated(v.mean, inflate_params_)) {
                     in_inflated = true;
                     break;
+                }
+            }
+            // Also check historical bboxes of confirmed-dynamic tracks (like DynamicBBoxRejection).
+            if (!in_inflated) {
+                for (const auto& hbbox : historical_bboxes) {
+                    if (hbbox.contains(v.mean) || hbbox.contains_inflated(v.mean, inflate_params_)) {
+                        in_inflated = true;
+                        break;
+                    }
                 }
             }
             v.is_dynamic = in_inflated;

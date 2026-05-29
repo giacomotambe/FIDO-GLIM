@@ -30,6 +30,7 @@ struct Track {
     int             static_frames  = 0;   ///< Consecutive frames confirmed static by propagate_to_clusters()
     PermanentState  permanent_state = PermanentState::NONE;
     Eigen::Vector3d velocity = Eigen::Vector3d::Zero();  ///< EMA-smoothed velocity [m/s] in current sensor frame
+    std::deque<BoundingBox> bbox_history;  ///< Recent past bboxes in current sensor frame (oldest front, newest back)
 };
 
 // ===========================================================================
@@ -70,6 +71,7 @@ public:
     int    min_dynamic_frames;        ///< Consecutive confirmed-dynamic frames before bbox is flagged as dynamic. Default: 3
     int    permanent_dynamic_frames;  ///< Consecutive dynamic frames to lock track as permanently dynamic. 0 = disabled. Default: 10
     int    permanent_static_frames;   ///< Consecutive static frames to lock track as permanently static.  0 = disabled. Default: 10
+    int    track_bbox_history_size;   ///< Number of past bboxes stored per track for historical inflated-zone checks. Default: 5
 };
 
 // ===========================================================================
@@ -122,6 +124,11 @@ public:
     /// Called after reject() to feed propagate_to_clusters() results back into track dynamic counters.
     /// Increments dynamic_frames for tracks whose bbox was confirmed dynamic; resets to 0 otherwise.
     void update_dynamic_feedback(const std::vector<BoundingBox>& post_rejection_bboxes);
+
+    /// Returns all historical bboxes (already in current sensor frame) for tracks that are
+    /// currently confirmed dynamic (dynamic_frames >= min_dynamic_frames or permanently dynamic).
+    /// Used by propagate_to_clusters() for the historical inflated-zone check.
+    std::vector<BoundingBox> get_dynamic_track_history() const;
 
 private:
     DynamicClusterExtractorParams     params_;
