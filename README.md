@@ -113,7 +113,7 @@ The ego-motion increment ΔT between consecutive scans is provided by an **error
 ```bash
 # Clone inside your ROS 2 workspace
 cd ~/ros2_ws/src
-git clone https://github.com/<your-username>/FIDO-GLIM.git
+git clone https://github.com/giacomotambe/FIDO-GLIM.git
 
 # Build
 cd ~/ros2_ws
