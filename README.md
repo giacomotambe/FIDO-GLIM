@@ -1,4 +1,12 @@
-# FIDO-GLIM
+<p align="center">
+  <img src="docs/assets/logo_purple.png" alt="FIDO-GLIM logo" width="160">
+</p>
+
+<h1 align="center">FIDO-GLIM</h1>
+
+<p align="center">
+  <a href="https://giacomotambe.github.io/FIDO-GLIM/"><strong>📖 Full documentation</strong></a>
+</p>
 
 **FIDO** (Filtering and Identification of Dynamic Objects) is a dynamic object rejection framework integrated into [GLIM](https://github.com/koide3/glim), a 3D LiDAR-inertial SLAM system. FIDO intercepts raw LiDAR scans before they reach the GLIM odometry front-end, partitions each point cloud into a *static* subset (forwarded to GLIM) and a *dynamic* subset (retained for diagnostics), and thereby improves localization accuracy and map quality in environments containing moving objects.
 
@@ -19,41 +27,15 @@ The two modules are independent and can be used separately or combined: Module 2
 
 ## How It Works
 
-### Module 1 — Voxel-Based Pipeline
+### Module 1 — Voxel-Based Pipeline ([full details](https://giacomotambe.github.io/FIDO-GLIM/module1_voxel.html))
 
 Each incoming LiDAR frame passes through five sequential stages:
 
-```
-Raw scan
-   │
-   ▼
-1. Voxelization          — hash-indexed voxel grid, per-voxel Gaussian (μ, Σ)
-   │
-   ▼
-2. Static pre-filtering  — iterative RANSAC wall detection + persistent OBB registry
-                         — polar-grid ground segmentation with RANSAC refinement
-   │
-   ▼
-3. Cluster extraction    — DBSCAN on active voxels → bounding boxes → NMS → peer merge
-                         — overlap-based tracker with hysteresis (dynamic/static counters)
-   │
-   ▼
-4. Dynamic scoring       — per-voxel score: centroid shift + cluster context + history suppression
-                         — three-tier adaptive threshold (Tier 1 < Tier 2 < Tier 3)
-                         — motion-scale factor λ = 1 + α·‖Δt‖
-   │
-   ▼
-5. Label propagation     — 26-neighbor spatial propagation
-                         — cluster-level consistency enforcement
-                         — tracker feedback loop (closes detection↔tracking cycle)
-   │
-   ├──▶ Static frame  →  GLIM odometry
-   └──▶ Dynamic frame →  diagnostics / visualization
-```
+![Voxel-based dynamic object rejection pipeline](docs/assets/voxel_pipeline.png)
 
 **Key design novelty:** a closed feedback loop between cluster-level tracking and voxel-level scoring progressively lowers the detection threshold for persistently dynamic regions, enabling detection of slow-moving objects that fall below any single-frame geometric threshold.
 
-### Module 2 — Bounding-Box Pipeline
+### Module 2 — Bounding-Box Pipeline ([full details](https://giacomotambe.github.io/FIDO-GLIM/module2_bbox.html))
 
 ```
 External detector (ROS 2 topic)
@@ -69,27 +51,11 @@ Each box is kept active for a configurable number of frames (`max_bbox_frames`) 
 
 ---
 
-## Architecture
+## Architecture ([full details](https://giacomotambe.github.io/FIDO-GLIM/architecture.html))
 
 FIDO runs as a **producer–consumer** system decoupled from the GLIM preprocessing thread:
 
-```
-GLIM preprocessing thread
-        │  insert_frame()
-        ▼
-┌─────────────────────────────────┐
-│  AsyncDynamicObjectRejection    │  ← background thread
-│  ┌──────────────────────────┐   │
-│  │  WallFilter              │   │  Stage 1
-│  │  DynamicClusterExtractor │   │  Stage 2
-│  │  DynamicObjectRejection  │   │  Stage 3
-│  └──────────────────────────┘   │
-└─────────────────────────────────┘
-        │
-        ├──▶ static_frame_queue   →  GLIM odometry
-        ├──▶ dynamic_frame_queue  →  ROS 2 publisher
-        └──▶ wall_result_queue    →  ROS 2 publisher
-```
+![FIDO producer–consumer architecture](docs/assets/architecture.jpeg)
 
 The ego-motion increment ΔT between consecutive scans is provided by an **error-state Kalman filter** (`PoseKalmanFilter`) that fuses IMU predictions with SLAM pose updates.
 
@@ -125,7 +91,7 @@ source install/setup.bash
 
 ---
 
-## Configuration
+## Configuration ([full reference](https://giacomotambe.github.io/FIDO-GLIM/parameters.html))
 
 FIDO is configured through JSON files read at startup. The main config files are:
 
