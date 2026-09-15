@@ -1,0 +1,1022 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="FIDO-GLIM: dynamic-object rejection for GLIM, a 3D range-based mapping framework">
+      
+      
+        <meta name="author" content="giacomotambe">
+      
+      
+        <link rel="canonical" href="https://giacomotambe.github.io/FIDO-GLIM/module1_voxel.html">
+      
+      
+        <link rel="prev" href="architecture.html">
+      
+      
+        <link rel="next" href="module2_bbox.html">
+      
+      
+        
+      
+      
+      <link rel="icon" href="assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Module 1 — Voxel pipeline - FIDO-GLIM</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="css/custom.css">
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#module-1-voxel-based-pipeline" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="index.html" title="FIDO-GLIM" class="md-header__button md-logo" aria-label="FIDO-GLIM" data-md-component="logo">
+      
+  <img src="assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            FIDO-GLIM
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Module 1 — Voxel pipeline
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="orange"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-purple" data-md-color-accent="orange"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/giacomotambe/FIDO-GLIM" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="index.html" title="FIDO-GLIM" class="md-nav__button md-logo" aria-label="FIDO-GLIM" data-md-component="logo">
+      
+  <img src="assets/logo.png" alt="logo">
+
+    </a>
+    FIDO-GLIM
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/giacomotambe/FIDO-GLIM" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="index.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="installation.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="docker.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker images
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="quickstart.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="architecture.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module 1 — Voxel pipeline
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="module1_voxel.html" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module 1 — Voxel pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-voxelization-dynamicvoxelmapcpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1 · Voxelization — DynamicVoxelMapCPU
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-static-pre-filtering-wallfilter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2 · Static pre-filtering — WallFilter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-cluster-extraction-tracking-dynamicclusterextractor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3 · Cluster extraction &amp; tracking — DynamicClusterExtractor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-dynamic-scoring-dynamicobjectrejectioncpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4 · Dynamic scoring — DynamicObjectRejectionCPU
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-label-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5 · Label propagation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="module2_bbox.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module 2 — Bounding box
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="parameters.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="faq.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API list
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-voxelization-dynamicvoxelmapcpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1 · Voxelization — DynamicVoxelMapCPU
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-static-pre-filtering-wallfilter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2 · Static pre-filtering — WallFilter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-cluster-extraction-tracking-dynamicclusterextractor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3 · Cluster extraction &amp; tracking — DynamicClusterExtractor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-dynamic-scoring-dynamicobjectrejectioncpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4 · Dynamic scoring — DynamicObjectRejectionCPU
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-label-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5 · Label propagation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="module-1-voxel-based-pipeline">Module 1 — Voxel-based pipeline</h1>
+<p><em>Autonomous — needs no external detector.</em></p>
+<p>Every incoming scan passes through five sequential stages inside <code>AsyncDynamicObjectRejection::run()</code>. The novelty is stage 5's <strong>closed feedback loop</strong>: cluster-level tracking (stage 3) progressively lowers the per-voxel threshold for regions with a persistent dynamic history (stage 4), which lets slow-moving objects — below any single-frame geometric threshold — accumulate enough evidence across frames to be caught.</p>
+<p><img alt="Voxel-based dynamic object rejection pipeline: raw point cloud and ego-motion go through pre-processing (voxelization, wall labeling, ground filtering), clustering (DBSCAN, OBB fitting, tracking), scoring (per-voxel score against the previous map, three-tier adaptive threshold), propagation (neighbor expansion, cluster-level consistency), and output (static/dynamic point routing, history update) — with persistent state (history buffer, wall OBB registry, cluster tracker) carried across frames." src="assets/voxel_pipeline.png" /></p>
+<h2 id="1-voxelization-dynamicvoxelmapcpu">1 · Voxelization — <code>DynamicVoxelMapCPU</code></h2>
+<p><code>DynamicVoxelMapCPU</code> (<code>dynamic_voxelmap_cpu.hpp</code>) extends gtsam_points' <code>GaussianVoxelMap</code> and <code>IncrementalVoxelMap</code> with a richer per-voxel payload, <code>DynamicGaussianVoxel</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>is_wall</code> / <code>is_ground</code> / <code>is_outlier</code> / <code>is_dynamic</code></td>
+<td>Classification flags set by later stages</td>
+</tr>
+<tr>
+<td><code>voxel_points</code>, <code>voxel_intensities</code>, <code>voxel_times</code></td>
+<td>Raw points retained for splitting the frame after classification</td>
+</tr>
+<tr>
+<td><code>dynamic_score</code></td>
+<td>Running score written by stage 4 and read by stage 5</td>
+</tr>
+</tbody>
+</table>
+<p>Resolution is a single knob, <code>voxel_resolution</code> in <code>config_wall_filter.json</code> (default <strong>0.25 m</strong>) — every downstream DBSCAN <code>eps</code> and neighbor search derives from it, so it's the one parameter that reshapes the whole pipeline's spatial granularity.</p>
+<h2 id="2-static-pre-filtering-wallfilter">2 · Static pre-filtering — <code>WallFilter</code></h2>
+<p><code>WallFilter::filter()</code> voxelizes the frame once (no second pass downstream) and runs iterative RANSAC over voxel centroids, up to <code>max_planes</code> planes, classifying each fitted plane by its normal angle:</p>
+<ul>
+<li><strong>Wall</strong> — normal within <code>wall_vertical_angle_deg</code> of horizontal.</li>
+<li><strong>Floor/ceiling</strong> — normal within <code>floor_ceiling_angle_deg</code> of vertical.</li>
+</ul>
+<p>For each wall plane it extracts the largest spatially-contiguous inlier cluster, builds an oriented bounding box (rejecting non-compact shapes via <code>wall_bbox_max_aspect_ratio</code>), and merges it into a <strong><code>WallBBoxRegistry</code></strong> that persists across frames — new observations are matched to existing boxes by 3D OBB IoU (Separating Axis Theorem) and SLERP-blended in, or added as a new wall if the overlap is below <code>overlap_threshold</code>. Registry entries not re-observed for <code>max_missed_frames</code> frames expire.</p>
+<p>Ground is handled separately when <code>floor_polar_enabled</code> is true: a <strong>polar-grid segmentation</strong> (range bins of <code>floor_polar_r_bin</code>, angular bins of <code>floor_polar_theta_deg</code>) picks the <code>floor_polar_k_lowest</code> lowest points per cell between <code>floor_polar_seed_min_r</code>/<code>_seed_max_r</code>, checks local flatness and slope, then a constrained RANSAC (<code>ransac_floor_plane</code>) refits a single horizontal plane over the accepted seeds. Voxels beyond every wall's half-space, or beyond a radial fallback (<code>max_detection_radius</code>), are flagged <code>is_outlier</code>.</p>
+<p>Wall and ground voxels are <strong>unconditionally kept static</strong> — they never enter stage 4's scoring loop, which is what keeps FIDO cheap: only the minority of voxels that are neither structure nor obvious outliers get scored.</p>
+<table>
+<thead>
+<tr>
+<th>Key parameters</th>
+<th><code>config_wall_filter.json</code></th>
+<th><code>config_wall_registry.json</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RANSAC</td>
+<td><code>ransac_inlier_threshold</code> 0.07 m · <code>ransac_confidence</code> 0.99 · <code>ransac_max_iterations</code> 100 · <code>ransac_min_inliers</code> 30</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Ground</td>
+<td><code>floor_polar_flatness_threshold</code> 0.05 · <code>floor_polar_max_ground_height</code> 0.3 m · <code>floor_polar_max_vertical_spread</code> 0.30 m</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Registry merge</td>
+<td>—</td>
+<td><code>overlap_threshold</code> 0.3 · <code>merge_weight</code> 0.3 · <code>min_normal_dot</code> 0.9</td>
+</tr>
+<tr>
+<td>Registry expiry</td>
+<td>—</td>
+<td><code>enable_expiry</code> true · <code>max_missed_frames</code> 5 · <code>max_duplicate_center_distance</code> 2.0 m</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-cluster-extraction-tracking-dynamicclusterextractor">3 · Cluster extraction &amp; tracking — <code>DynamicClusterExtractor</code></h2>
+<p>Runs on the wall/ground-filtered voxelmap, in order:</p>
+<ol>
+<li><strong>DBSCAN</strong> over active voxel centroids (<code>cluster_voxels</code>) — <code>eps = eps_voxel_factor × voxel_resolution</code>, <code>min_pts</code> core-point threshold, bounded by <code>knn_max_neighbors</code>.</li>
+<li><strong>Bounding boxes</strong> per cluster (<code>compute_bounding_boxes</code>), discarding clusters under <code>min_cluster_voxels</code> or <code>min_points_for_bbox</code>, and boxes outside the <code>bbox_min/max_extent</code> and <code>bbox_min/max_volume</code> windows.</li>
+<li><strong>NMS</strong> at <code>cluster_iou_threshold</code>, then <strong>peer merge</strong> (<code>merge_nearby_clusters</code>) — iteratively fuses boxes within <code>peer_merge_distance</code>, converging on merge chains. The distance is picked by <code>env_type</code> in <code>config_ros.json</code>: <code>peer_merge_distance_indoor</code> or <code>_outdoor</code>.</li>
+<li><strong>Tracking</strong> (<code>update_tracks</code>) — associates boxes to existing <code>Track</code>s by center distance (<code>track_match_distance</code>) and IoU (<code>track_match_iou</code>); unmatched tracks survive up to <code>track_max_missed</code> frames; matched tracks get an EMA-smoothed velocity.</li>
+</ol>
+<p>Each <code>Track</code> carries a small state machine that is FIDO's actual hysteresis mechanism:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dynamic_frames</code> / <code>static_frames</code></td>
+<td>Consecutive-frame counters updated by <code>update_dynamic_feedback()</code> from stage 4's output</td>
+</tr>
+<tr>
+<td><code>PermanentState::NONE → DYNAMIC → STATIC</code></td>
+<td>Locked once <code>dynamic_frames ≥ permanent_dynamic_frames</code> or <code>static_frames ≥ permanent_static_frames</code> (<code>0</code> disables locking). A locked track's boxes stop being re-evaluated by stage 5.</td>
+</tr>
+<tr>
+<td><code>bbox_history</code></td>
+<td>Last <code>track_bbox_history_size</code> boxes, re-expressed in the current sensor frame each call — feeds <code>get_dynamic_track_history()</code></td>
+</tr>
+</tbody>
+</table>
+<p>A box is considered "confirmed dynamic" once <code>PermanentState::DYNAMIC</code> <em>or</em> <code>dynamic_frames ≥ min_dynamic_frames</code> — with the shipped config, just <strong>2</strong> consecutive confirmed-dynamic frames before stage 4 starts treating the whole cluster as reliable evidence (Tier 1, below).</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>eps_voxel_factor</code></td>
+<td>1.5</td>
+<td><code>track_match_distance</code></td>
+<td>2.0 m</td>
+</tr>
+<tr>
+<td><code>min_cluster_voxels</code></td>
+<td>3</td>
+<td><code>track_match_iou</code></td>
+<td>0.05</td>
+</tr>
+<tr>
+<td><code>cluster_iou_threshold</code></td>
+<td>0.1</td>
+<td><code>track_max_missed</code></td>
+<td>5 frames</td>
+</tr>
+<tr>
+<td><code>peer_merge_distance_indoor</code></td>
+<td>0.01 m</td>
+<td><code>min_dynamic_frames</code></td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>peer_merge_distance_outdoor</code></td>
+<td>2.8 m</td>
+<td><code>permanent_dynamic_frames</code></td>
+<td>8</td>
+</tr>
+<tr>
+<td><code>bbox_min_extent</code> / <code>_max_extent</code></td>
+<td>0.1 m / 4.0 m</td>
+<td><code>permanent_static_frames</code></td>
+<td>20</td>
+</tr>
+</tbody>
+</table>
+<h2 id="4-dynamic-scoring-dynamicobjectrejectioncpu">4 · Dynamic scoring — <code>DynamicObjectRejectionCPU</code></h2>
+<p><code>score_voxels()</code> compares the current voxelmap against the previous frame's, accumulating a per-voxel <code>dynamic_score</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">score</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">w_shift</span><span class="w">        </span><span class="o">*</span><span class="w"> </span><span class="n">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">centroid_shift</span><span class="w"> </span><span class="err">−</span><span class="w"> </span><span class="n">min_shift_m</span><span class="p">)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">       </span><span class="o">+</span><span class="w"> </span><span class="n">w_mahalanobis</span><span class="w">  </span><span class="o">*</span><span class="w"> </span><span class="n">mahalanobis_distance</span><span class="w">          </span><span class="c1">// 0 by default</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">       </span><span class="o">+</span><span class="w"> </span><span class="n">w_cluster</span><span class="w">       </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="o">+</span><span class="mi">1</span><span class="w"> </span><span class="n">inside</span><span class="w"> </span><span class="n">dynamic</span><span class="w"> </span><span class="n">cluster</span><span class="p">,</span><span class="w"> </span><span class="err">−</span><span class="mf">0.5</span><span class="w"> </span><span class="n">inside</span><span class="w"> </span><span class="k">static</span><span class="o">/</span><span class="n">none</span><span class="p">)</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">       </span><span class="o">+</span><span class="w"> </span><span class="n">w_velocity</span><span class="w">      </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="n">cluster_ema_speed</span><span class="w"> </span><span class="err">−</span><span class="w"> </span><span class="n">velocity_static_threshold</span><span class="p">)</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">       </span><span class="err">−</span><span class="w"> </span><span class="n">w_history</span><span class="w">        </span><span class="o">*</span><span class="w"> </span><span class="n">static_ratio_over</span><span class="p">(</span><span class="n">frame_num_memory</span><span class="p">)</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">       </span><span class="o">+</span><span class="w"> </span><span class="n">w_history_dynamic</span><span class="o">*</span><span class="w"> </span><span class="n">dynamic_frames_in_history</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">       </span><span class="err">−</span><span class="w"> </span><span class="n">w_distance</span><span class="w">       </span><span class="o">*</span><span class="w"> </span><span class="err">‖</span><span class="n">voxel_position</span><span class="err">‖</span><span class="w">             </span><span class="c1">// suppresses far-range noise</span>
+</code></pre></div>
+<p>Ego-motion feeds a <strong>motion-scale factor</strong>: <code>motion_scale_</code> combines <code>motion_threshold_scale × ‖Δtranslation‖</code> and <code>rotation_threshold_scale × ‖Δrotation‖</code> from <code>PoseKalmanFilter</code>'s delta pose (see <a href="architecture.html#ego-motion">Architecture</a>), widening the threshold while the platform moves fast so ego-motion residual doesn't get flagged as a moving object.</p>
+<p>The score is compared against an <strong>effective threshold</strong>, not the raw <code>dynamic_score_threshold</code> — <code>base_threshold = dynamic_score_threshold × motion_scale_</code> is then multiplied by one of three tier factors depending on how much corroborating evidence the voxel has:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Condition</th>
+<th>Factor (shipped)</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="tier1">Tier 1</span></td>
+<td>Voxel inside a <strong>confirmed</strong> dynamic cluster bbox</td>
+<td><code>tier1_threshold_factor</code> = 0.55</td>
+<td>Lowest bar — cluster-level tracking already vouches for this region</td>
+</tr>
+<tr>
+<td><span class="tier2">Tier 2</span></td>
+<td>Dynamic last frame, no cluster bbox this frame</td>
+<td><code>memory_threshold_factor</code> = 0.70</td>
+<td>Short-memory carry-over for a track that briefly lost cluster support</td>
+</tr>
+<tr>
+<td><span class="tier3">Tier 3</span></td>
+<td>No cluster, no dynamic history</td>
+<td><code>unconstrained_threshold_factor</code> = 3.0</td>
+<td>Highest bar — isolated evidence must be strong to avoid false positives</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">Why the tiers matter</p>
+<p>Tier 1's factor must stay above <code>w_cluster / dynamic_score_threshold</code> — otherwise every voxel inside any tracked cluster would be flagged unconditionally regardless of its own shift, defeating the per-voxel check entirely (noted directly in <code>DynamicObjectRejectionParamsCPU</code>'s doc comment).</p>
+</div>
+<h2 id="5-label-propagation">5 · Label propagation</h2>
+<p>Two passes tighten the classification before points are split, then feedback closes the loop:</p>
+<ol>
+<li><strong><code>propagate_to_neighbors()</code></strong> — adds <code>w_neighbor</code> to the score of each of the 26 voxel-grid neighbors of a confirmed-dynamic voxel and re-applies the threshold, so a moving object's silhouette doesn't get eroded to its highest-shift voxels only.</li>
+<li><strong><code>propagate_to_clusters()</code></strong> — if the dynamic-voxel ratio inside a cluster bbox crosses <code>cluster_propagation_threshold</code> (itself scaled by motion via <code>cluster_motion_scale</code> / <code>cluster_rotation_scale</code>), the whole cluster is marked dynamic. For voxels outside every current bbox, a separate check against <code>historical_bboxes</code> — past frames' boxes of already-confirmed tracks, via <code>contains()</code> / <code>contains_inflated()</code> — catches object parts a slightly-stale detection missed.</li>
+<li><strong><code>update_dynamic_feedback()</code></strong> (back in <code>DynamicClusterExtractor</code>) — increments each track's <code>dynamic_frames</code> when its bbox was confirmed dynamic this frame, resets to 0 otherwise. This is what makes stage 3's hysteresis and stage 4's Tier 1 bar mutually reinforcing frame over frame.</li>
+</ol>
+<p>Finally, <code>collect_points()</code> walks every voxel and appends its raw points to the static or dynamic bucket, and <code>build_frame()</code> reassembles a <code>PreprocessedFrame</code> for each — recomputing k-NN neighbor indices when the source frame requested them.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2026 giacomotambe — extends GLIM, Copyright &copy; 2021&ndash;2024 Kenji Koide
+
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/giacomotambe/FIDO-GLIM" target="_blank" rel="noopener" title="FIDO-GLIM on GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+    <a href="https://github.com/koide3/glim" target="_blank" rel="noopener" title="upstream GLIM" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "navigation.expand", "content.code.copy", "toc.follow"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

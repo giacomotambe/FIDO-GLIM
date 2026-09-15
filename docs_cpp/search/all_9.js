@@ -1,0 +1,16 @@
+var searchData=
+[
+  ['hardware_20used_0',['Hardware Used',['../index.html#autotoc_md21',1,'']]],
+  ['has_5fparam_1',['has_param',['../classglim_1_1Config.html#a139f166a16a4868b5e08dfa96e3a0294',1,'glim::Config']]],
+  ['how_20it_20works_2',['How It Works',['../index.html#autotoc_md4',1,'']]],
+  ['href_20https_3a_20giacomotambe_20github_20io_20fido_20glim_20architecture_20html_20full_20details_20a_3',['Architecture (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/architecture.html&quot; &gt;full details&lt;/a&gt;)',['../index.html#autotoc_md8',1,'']]],
+  ['href_20https_3a_20giacomotambe_20github_20io_20fido_20glim_20module1_5fvoxel_20html_20full_20details_20a_4',['Module 1 — Voxel-Based Pipeline (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/module1_voxel.html&quot; &gt;full details&lt;/a&gt;)',['../index.html#autotoc_md5',1,'']]],
+  ['href_20https_3a_20giacomotambe_20github_20io_20fido_20glim_20module2_5fbbox_20html_20full_20details_20a_5',['Module 2 — Bounding-Box Pipeline (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/module2_bbox.html&quot; &gt;full details&lt;/a&gt;)',['../index.html#autotoc_md6',1,'']]],
+  ['href_20https_3a_20giacomotambe_20github_20io_20fido_20glim_20parameters_20html_20full_20reference_20a_6',['Configuration (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/parameters.html&quot; &gt;full reference&lt;/a&gt;)',['../index.html#autotoc_md14',1,'']]],
+  ['html_20full_20details_20a_7',['html full details a',['../index.html#autotoc_md8',1,'Architecture (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/architecture.html&quot; &gt;full details&lt;/a&gt;)'],['../index.html#autotoc_md5',1,'Module 1 — Voxel-Based Pipeline (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/module1_voxel.html&quot; &gt;full details&lt;/a&gt;)'],['../index.html#autotoc_md6',1,'Module 2 — Bounding-Box Pipeline (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/module2_bbox.html&quot; &gt;full details&lt;/a&gt;)']]],
+  ['html_20full_20reference_20a_8',['Configuration (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/parameters.html&quot; &gt;full reference&lt;/a&gt;)',['../index.html#autotoc_md14',1,'']]],
+  ['https_3a_20giacomotambe_20github_20io_20fido_20glim_20architecture_20html_20full_20details_20a_9',['Architecture (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/architecture.html&quot; &gt;full details&lt;/a&gt;)',['../index.html#autotoc_md8',1,'']]],
+  ['https_3a_20giacomotambe_20github_20io_20fido_20glim_20module1_5fvoxel_20html_20full_20details_20a_10',['Module 1 — Voxel-Based Pipeline (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/module1_voxel.html&quot; &gt;full details&lt;/a&gt;)',['../index.html#autotoc_md5',1,'']]],
+  ['https_3a_20giacomotambe_20github_20io_20fido_20glim_20module2_5fbbox_20html_20full_20details_20a_11',['Module 2 — Bounding-Box Pipeline (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/module2_bbox.html&quot; &gt;full details&lt;/a&gt;)',['../index.html#autotoc_md6',1,'']]],
+  ['https_3a_20giacomotambe_20github_20io_20fido_20glim_20parameters_20html_20full_20reference_20a_12',['Configuration (&lt;a href=&quot;https://giacomotambe.github.io/FIDO-GLIM/parameters.html&quot; &gt;full reference&lt;/a&gt;)',['../index.html#autotoc_md14',1,'']]]
+];
