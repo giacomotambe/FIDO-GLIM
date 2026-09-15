@@ -4,33 +4,7 @@
 
 Every incoming scan passes through five sequential stages inside `AsyncDynamicObjectRejection::run()`. The novelty is stage 5's **closed feedback loop**: cluster-level tracking (stage 3) progressively lowers the per-voxel threshold for regions with a persistent dynamic history (stage 4), which lets slow-moving objects — below any single-frame geometric threshold — accumulate enough evidence across frames to be caught.
 
-```
-Raw scan
-   │
-   ▼
-1. Voxelization          — hash-indexed voxel grid, per-voxel Gaussian (μ, Σ)
-   │
-   ▼
-2. Static pre-filtering  — iterative RANSAC wall detection + persistent OBB registry
-                          — polar-grid ground segmentation with RANSAC refinement
-   │
-   ▼
-3. Cluster extraction    — DBSCAN on active voxels → bounding boxes → NMS → peer merge
-                          — overlap-based tracker with hysteresis (dynamic/static counters)
-   │
-   ▼
-4. Dynamic scoring       — per-voxel score: shift + cluster/history context + distance
-                          — three-tier adaptive threshold (Tier 1 < Tier 2 < Tier 3)
-                          — motion-scale factor from PoseKalmanFilter's ΔT
-   │
-   ▼
-5. Label propagation     — 26-neighbor spatial propagation
-                          — cluster-level consistency enforcement
-                          — tracker feedback loop (closes detection↔tracking cycle)
-   │
-   ├──▶ Static frame  →  GLIM odometry
-   └──▶ Dynamic frame →  diagnostics / visualization
-```
+![Voxel-based dynamic object rejection pipeline: raw point cloud and ego-motion go through pre-processing (voxelization, wall labeling, ground filtering), clustering (DBSCAN, OBB fitting, tracking), scoring (per-voxel score against the previous map, three-tier adaptive threshold), propagation (neighbor expansion, cluster-level consistency), and output (static/dynamic point routing, history update) — with persistent state (history buffer, wall OBB registry, cluster tracker) carried across frames.](assets/voxel_pipeline.png)
 
 ## 1 · Voxelization — `DynamicVoxelMapCPU`
 
