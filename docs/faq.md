@@ -28,7 +28,7 @@ On indoor and outdoor sequences under both static and moving-robot conditions, F
 
 ### Where's the ROS 2 node that publishes FIDO's diagnostic clouds?
 
-Not in this repository — see [Architecture](architecture.md#scope-of-this-repository).
+Not in this repository — it's in [FIDO-GLIM-ROS2](https://github.com/giacomotambe/FIDO-GLIM-ROS2), a companion repository cloned and built alongside this one. See [Installation](installation.md#build-the-ros-2-node-fido-glim-ros2) and [Architecture](architecture.md#scope-of-this-repository).
 
 ## Cite
 

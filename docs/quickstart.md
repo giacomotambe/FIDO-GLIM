@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-1. Install FIDO-GLIM on your system following [the installation section](installation.md), or use the [Docker images](docker.md).
+1. Install FIDO-GLIM **and** [FIDO-GLIM-ROS2](https://github.com/giacomotambe/FIDO-GLIM-ROS2) following [the installation section](installation.md#build-the-ros-2-node-fido-glim-ros2), or use the [Docker images](docker.md).
 2. Confirm your sensor and topic configuration in `config/`:
 
 ```json
@@ -22,7 +22,7 @@ glim/config/config_ros.json
 
 ## Executables
 
-FIDO-GLIM inherits GLIM's two ROS executables, unchanged: ***glim_rosnode*** and ***glim_rosbag***.
+`glim_rosnode` and `glim_rosbag` are provided by [FIDO-GLIM-ROS2](https://github.com/giacomotambe/FIDO-GLIM-ROS2), the companion workspace package built on top of this repository's `glim` library:
 
 ### glim_rosnode
 
@@ -41,7 +41,7 @@ ros2 run glim_ros glim_rosbag <bag_name>
 ```
 
 !!! note "Where the ROS node lives"
-    This repository builds `libglim.so` and its plugin modules — the algorithms and the JSON config schema they read. `glim_rosnode`/`glim_rosbag` themselves, and the publishers for FIDO's diagnostic clouds, live in the downstream [`glim_ros2`](https://github.com/koide3/glim_ros2) workspace package that links against this library. See [Architecture](architecture.md) for exactly where FIDO's thread sits in that pipeline.
+    This repository builds `libglim.so` and its plugin modules — the algorithms and the JSON config schema they read. `glim_rosnode`/`glim_rosbag` themselves, and the publishers for FIDO's diagnostic clouds, live in [**FIDO-GLIM-ROS2**](https://github.com/giacomotambe/FIDO-GLIM-ROS2), a separate workspace package that links against this library — clone it alongside this repo, see [Installation](installation.md#build-the-ros-2-node-fido-glim-ros2). See [Architecture](architecture.md) for exactly where FIDO's thread sits in that pipeline.
 
 ## Configuration files
 

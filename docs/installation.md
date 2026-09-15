@@ -7,7 +7,7 @@
 
 | Dependency | Notes |
 |---|---|
-| ROS 2 Jazzy+ | Communication layer for the consuming `glim_ros2` node |
+| ROS 2 Jazzy+ | Communication layer for the [FIDO-GLIM-ROS2](https://github.com/giacomotambe/FIDO-GLIM-ROS2) node |
 | Eigen3, Boost (`serialization`) | Linear algebra, map serialization |
 | [GTSAM](https://github.com/borglab/gtsam) ≥ 4.2 | Factor graph backend |
 | [gtsam_points](https://github.com/koide3/gtsam_points) ≥ 1.2.0 | Factor graph extensions, KdTree, point-cloud & voxelmap types |
@@ -51,6 +51,25 @@ source install/setup.bash
 
 !!! note "Package name"
     `package.xml` declares the package as `glim` (version 1.3.0), so `--packages-select glim` is what `colcon` actually resolves.
+
+## Build the ROS 2 node — FIDO-GLIM-ROS2
+
+This repository only builds `libglim.so` and its plugin modules — it has no `glim_rosnode`/`glim_rosbag` executables and no publishers/subscribers of its own (see [Architecture](architecture.md#scope-of-this-repository)). Those live in a separate, companion repository, **[FIDO-GLIM-ROS2](https://github.com/giacomotambe/FIDO-GLIM-ROS2)**, which must be cloned into the same workspace and built against the `glim` package above.
+
+```bash
+cd ~/ros2_ws/src
+git clone https://github.com/giacomotambe/FIDO-GLIM-ROS2.git
+
+cd ~/ros2_ws
+colcon build --symlink-install --packages-select glim glim_ros
+
+source install/setup.bash
+```
+
+Once both are built and sourced, `ros2 run glim_ros glim_rosnode` / `glim_rosbag` are available — see [Getting started](quickstart.md#executables).
+
+!!! note "Two repositories, one workspace"
+    `FIDO-GLIM` (this repo) is the SLAM + dynamic-rejection library. `FIDO-GLIM-ROS2` is the ROS 2 wrapper around it — the node, its launch files, and the topic publishers/subscribers. Both need to sit side by side under `~/ros2_ws/src` for `colcon build` to resolve the dependency between them.
 
 ### Standalone CMake build
 
