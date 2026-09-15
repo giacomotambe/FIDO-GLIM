@@ -1,0 +1,78 @@
+site_name: "FIDO-GLIM"
+site_author: giacomotambe
+repo_url: https://github.com/giacomotambe/FIDO-GLIM
+site_url: https://giacomotambe.github.io/FIDO-GLIM
+site_description: "FIDO-GLIM: dynamic-object rejection for GLIM, a 3D range-based mapping framework"
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+  font:
+    text: Roboto
+    code: Roboto Mono
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - navigation.expand
+    - content.code.copy
+    - toc.follow
+
+use_directory_urls: false
+
+markdown_extensions:
+  - meta
+  - attr_list
+  - tables
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+copyright: >
+  Copyright &copy; 2026 giacomotambe —
+  extends GLIM, Copyright &copy; 2021&ndash;2024 Kenji Koide
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/giacomotambe/FIDO-GLIM
+      name: FIDO-GLIM on GitHub
+    - icon: fontawesome/brands/github
+      link: https://github.com/koide3/glim
+      name: upstream GLIM
+
+extra_css:
+  - css/custom.css
+
+nav:
+  - 'index.md'
+  - 'installation.md'
+  - 'docker.md'
+  - 'quickstart.md'
+  - 'architecture.md'
+  - 'Module 1 — Voxel pipeline': 'module1_voxel.md'
+  - 'Module 2 — Bounding box': 'module2_bbox.md'
+  - 'parameters.md'
+  - 'faq.md'
+  - 'api.md'

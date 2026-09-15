@@ -1,0 +1,46 @@
+name: gendoc
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - 'include/**'
+      - 'mkdocs.yml'
+      - 'README.md'
+      - '.github/workflows/gendoc.yml'
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  gendoc:
+    name: Generate and deploy documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Git Credentials
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz python3-dev python3-pip
+
+      - name: Install python dependencies
+        run: python3 -m pip install mkdocs mkdocs-material
+
+      - name: Generate documentation
+        run: cd docs && make all
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: ./site/*
+
+      - name: Deploy documentation
+        run: cd docs && make deploy
