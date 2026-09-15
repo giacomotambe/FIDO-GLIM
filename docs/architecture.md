@@ -2,27 +2,7 @@
 
 FIDO runs as a **producer&ndash;consumer** system decoupled from GLIM's preprocessing thread, so scan filtering never blocks scan acquisition. The producer pushes a frame; a background thread runs the three-stage voxel pipeline and fans its results out into four lock-free queues the producer drains whenever it's ready.
 
-```
-GLIM preprocessing thread
-        │  async.insert_frame(frame)
-        ▼
-┌───────────────────────────────────────────────────────────┐
-│  AsyncDynamicObjectRejection — background thread, per frame │
-│                                                               │
-│   1. WallFilter          →  2. DynamicClusterExtractor        │
-│   (voxelize + RANSAC        (DBSCAN + NMS + tracking)         │
-│    walls/floor)                                                │
-│                              │                                 │
-│                              ▼                                 │
-│                    3. DynamicObjectRejectionCPU                │
-│                       (tiered scoring + propagation)           │
-└───────────────────────────────────────────────────────────┘
-        │
-        ├──▶ static_frame_queue    → get_results()            → GLIM odometry
-        ├──▶ dynamic_frame_queue   → get_dynamic_results()     → diagnostics
-        ├──▶ wall_result_queue     → get_wall_results()        → diagnostics
-        └──▶ cluster_bbox_queue_   → get_cluster_bbox_results()
-```
+![FIDO producer–consumer architecture: GLIM's preprocessing thread hands each frame to AsyncDynamicObjectRejection, a background thread that runs WallFilter, then DynamicClusterExtractor, then DynamicObjectRejectionCPU, and fans the results out into four queues consumed by GLIM odometry and diagnostics.](assets/architecture.jpeg)
 
 ## Clustering runs *before* scoring
 
