@@ -20,6 +20,20 @@
   display: none;
 }
 
+.md-header__button.md-logo {
+  padding: 0.2rem 0.4rem;
+}
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 2.2rem;
+  width: auto;
+}
+.md-nav__title .md-nav__button.md-logo img,
+.md-nav__title .md-nav__button.md-logo svg {
+  height: 3.6rem;
+  width: auto;
+}
+
 .tier1 { color: #1f8a5f; font-weight: 600; }
 .tier2 { color: #b8860b; font-weight: 600; }
 .tier3 { color: #c0392b; font-weight: 600; }
