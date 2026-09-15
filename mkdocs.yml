@@ -19,8 +19,8 @@ theme:
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
-  logo: assets/logo.svg
-  favicon: assets/favicon.svg
+  logo: assets/logo.png
+  favicon: assets/favicon.png
   font:
     text: Roboto
     code: Roboto Mono

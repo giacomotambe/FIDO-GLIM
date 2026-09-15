@@ -2,7 +2,7 @@
 
 ## Introduction
 
-![FIDO-GLIM](assets/logo.svg "FIDO-GLIM Logo"){ width="140" }
+![FIDO-GLIM](assets/logo.png "FIDO-GLIM Logo"){ width="140" }
 
 **FIDO** (Filtering and Identification of Dynamic Objects) is a dynamic-object rejection front-end built into [GLIM](https://github.com/koide3/glim), a versatile and extensible range-based 3D mapping framework. This repository *is* GLIM 1.3.0 with a fifth module tree, `src/glim/dynamic_rejection/`, added in place — everything else (`preprocess/`, `odometry/`, `mapping/`, `viewer/`) is unmodified upstream GLIM.
 
