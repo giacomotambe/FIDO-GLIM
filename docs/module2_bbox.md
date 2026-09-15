@@ -4,15 +4,7 @@
 
 `DynamicBBoxRejection` is deliberately simple: it holds a list of externally-supplied `BoundingBox`es, ages them, and removes any point that falls inside one.
 
-```
-External detector (ROS 2 topic)
-   │  oriented 3D bounding boxes + optional velocity
-   ▼
-Age filter  →  OBB containment test  →  velocity-inflated ellipsoid test
-   │
-   ├──▶ Static frame  →  GLIM
-   └──▶ Dynamic frame →  diagnostics
-```
+![Bounding-box dynamic object rejection pipeline: external detector boxes go through an age filter, an OBB containment test, and a velocity-inflated ellipsoid test, routing points to GLIM odometry or diagnostics.](assets/bbox_pipeline.jpeg)
 
 `reject()` ages every stored box each call (`bbox_ages_[i] < max_bbox_frames_`), then tests every point against both `bbox.contains(point)` and `bbox.contains_inflated(point, params)` — a hit against either drops the point into the dynamic bucket and breaks out of the box loop. `insert_bounding_boxes()` applies a flat `inflate_margin` to every incoming box before storing it.
 

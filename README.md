@@ -37,15 +37,7 @@ Each incoming LiDAR frame passes through five sequential stages:
 
 ### Module 2 — Bounding-Box Pipeline ([full details](https://giacomotambe.github.io/FIDO-GLIM/module2_bbox.html))
 
-```
-External detector (ROS 2 topic)
-   │  oriented 3D bounding boxes + optional velocity
-   ▼
-Age filter  →  OBB containment test  →  velocity-inflated ellipsoid test
-   │
-   ├──▶ Static frame  →  GLIM
-   └──▶ Dynamic frame →  diagnostics
-```
+![Bounding-box dynamic object rejection pipeline](docs/assets/bbox_pipeline.jpeg)
 
 Each box is kept active for a configurable number of frames (`max_bbox_frames`) to tolerate detector latency. When velocity is available, an asymmetric ellipsoid is inflated forward along the heading direction to cover the object's swept volume.
 
