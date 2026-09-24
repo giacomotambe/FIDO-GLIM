@@ -34,6 +34,12 @@
     "noise_sigma0": 0.045,
     "noise_sigma_slope": 0.007,
     "noise_sigma_max": 0.1,
-    "noise_deadzone_k": 3.0
+    "noise_deadzone_k": 3.0,
+    "evidence_enabled": false,
+    "evidence_resolution": 0.4,
+    "evidence_decay": 0.7,
+    "evidence_gain": 1.0,
+    "evidence_on": 1.5,
+    "evidence_off": 0.5
   }
 }

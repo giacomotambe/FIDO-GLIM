@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <glim/preprocess/preprocessed_frame.hpp>
@@ -60,6 +61,13 @@ public:
     double noise_deadzone_k;              ///< Dead zone = max(min_shift_m, k * sigma(range)).
     // Final voxel assignment
     bool   keep_voxel_evidence;           ///< Keep voxels classified dynamic by per-voxel scoring even when outside every bbox.
+    // World-frame dynamic evidence grid (temporal consistency independent of track IDs)
+    bool   evidence_enabled;              ///< Enable the world-frame evidence grid.
+    double evidence_resolution;           ///< Cell size [m].
+    double evidence_decay;                ///< Per-frame multiplicative decay of the evidence.
+    double evidence_gain;                 ///< Evidence added when a voxel in the cell is classified dynamic.
+    double evidence_on;                   ///< Cell switches ON when evidence >= this value.
+    double evidence_off;                  ///< Cell switches OFF when evidence < this value (asymmetric hysteresis).
     // Permanent-static unlock
     double unlock_ratio_factor;           ///< A cluster shows "strong motion" when its dynamic ratio > factor * propagation threshold (also for locked clusters).
     // Misc
@@ -157,6 +165,9 @@ private:
     // Pipeline steps (called in order inside reject())
     // -----------------------------------------------------------------------
 
+    /// Update the world-frame evidence grid with this frame's labels and relabel voxels from the cell state.
+    void apply_world_evidence(gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
+
     /// Build voxel_bboxes_ (single O(nvox * n_bbox) pass, parallel).
     void index_voxel_bboxes(
         const gtsam_points::DynamicVoxelMapCPU& voxelmap,
@@ -231,6 +242,9 @@ private:
     /// in_base == false means the voxel is only inside the velocity-inflated zone
     /// of a bbox that was dynamic at the time of indexing.
     std::vector<std::vector<std::pair<int, bool>>> voxel_bboxes_;
+    struct EvidenceCell { float e = 0.f; int last = 0; bool on = false; };
+    std::unordered_map<int64_t, EvidenceCell> evidence_;
+    int frame_idx_ = 0;
     
 
     std::vector<int> dynamic_voxels_neighbor_indices_;

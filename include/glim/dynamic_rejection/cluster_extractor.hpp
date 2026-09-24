@@ -76,6 +76,11 @@ public:
     bool   use_motion_prediction;     ///< Predict track position with constant velocity before association. Default: true
     double fast_track_speed;          ///< XY speed [m/s] above which a track uses fast_track_min_dynamic_frames. <= 0 = disabled. Default: 0 (1-frame hysteresis caused large false positives on indoor data)
     int    fast_track_min_dynamic_frames; ///< Hysteresis for fast tracks (lower latency). Default: 1
+    bool   use_centroid_association;  ///< Associate by point-centroid distance (Hungarian) instead of bbox overlap (greedy). Default: true
+    double assoc_gate_base;           ///< Association gate [m] at range 0 for a track seen in the previous frame. Default: 0.8
+    double assoc_gate_per_range;      ///< Gate increase per metre of range. Default: 0.03
+    double assoc_gate_per_missed;     ///< Gate increase per missed frame. Default: 0.3
+    int    release_static_frames;     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
     int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
 };
 

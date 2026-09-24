@@ -76,6 +76,12 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     noise_deadzone_k               = config.param<double>(k, "noise_deadzone_k",               3.0);
     keep_voxel_evidence            = config.param<bool>  (k, "keep_voxel_evidence",            false);
     unlock_ratio_factor            = config.param<double>(k, "unlock_ratio_factor",            2.0);
+    evidence_enabled               = config.param<bool>  (k, "evidence_enabled",               false);
+    evidence_resolution            = config.param<double>(k, "evidence_resolution",            0.4);
+    evidence_decay                 = config.param<double>(k, "evidence_decay",                 0.7);
+    evidence_gain                  = config.param<double>(k, "evidence_gain",                  1.0);
+    evidence_on                    = config.param<double>(k, "evidence_on",                    1.5);
+    evidence_off                   = config.param<double>(k, "evidence_off",                   0.5);
 
     // Frame history must hold at least the long-baseline frame.
     if (frame_num_memory < compare_baseline_frames)
@@ -174,6 +180,7 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     const int nvox = nvox_of(*wf_result.voxelmap);
     propagate_to_neighbors(*wf_result.voxelmap, nvox);
     propagate_to_clusters(*wf_result.voxelmap, cluster_bboxes, historical_bboxes);
+    if (params_.evidence_enabled) apply_world_evidence(*wf_result.voxelmap, cur_pose);
 
     // -----------------------------------------------------------------------
     // Split voxel points into static / dynamic buckets
@@ -493,6 +500,59 @@ void DynamicObjectRejectionCPU::score_voxels(
     };
 
     parallel_for_voxels(nvox, params_.num_threads, per_voxel);
+}
+
+
+// ===========================================================================
+// apply_world_evidence()
+// ===========================================================================
+// Per-cell evidence in the world frame: e <- e * decay^(frames since last update)
+// (+ gain if a voxel in the cell is dynamic this frame). A cell turns ON at
+// evidence_on and OFF below evidence_off. Voxels take the state of their cell, so
+// the label no longer depends on the cluster/track ID staying stable.
+
+void DynamicObjectRejectionCPU::apply_world_evidence(
+    gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor)
+{
+    ++frame_idx_;
+    const int    nvox = nvox_of(voxelmap);
+    const double inv  = 1.0 / params_.evidence_resolution;
+    const auto key_of = [&](const Eigen::Vector3d& pw) {
+        const int64_t x = static_cast<int64_t>(std::floor(pw.x() * inv)) & 0x1FFFFF;
+        const int64_t y = static_cast<int64_t>(std::floor(pw.y() * inv)) & 0x1FFFFF;
+        const int64_t z = static_cast<int64_t>(std::floor(pw.z() * inv)) & 0x1FFFFF;
+        return (x << 42) | (y << 21) | z;
+    };
+
+    // 1) accumulate: one update per cell per frame
+    std::vector<int64_t> keys(nvox, -1);
+    std::unordered_map<int64_t, bool> hit;   // cell -> any dynamic voxel this frame
+    for (int j = 0; j < nvox; ++j) {
+        const auto& v = voxelmap.lookup_voxel(j);
+        if (v.is_wall || v.is_ground || v.is_outlier) continue;
+        keys[j] = key_of(T_world_sensor * v.mean.head<3>());
+        auto& h = hit[keys[j]];
+        h = h || v.is_dynamic;
+    }
+    for (const auto& [k, dyn] : hit) {
+        auto& c = evidence_[k];
+        c.e = static_cast<float>(c.e * std::pow(params_.evidence_decay, frame_idx_ - c.last));
+        c.last = frame_idx_;
+        if (dyn) c.e += static_cast<float>(params_.evidence_gain);
+        if (!c.on && c.e >= params_.evidence_on) c.on = true;
+        else if (c.on && c.e < params_.evidence_off) c.on = false;
+    }
+    // 2) relabel
+    for (int j = 0; j < nvox; ++j)
+        if (keys[j] >= 0) voxelmap.lookup_voxel(j).is_dynamic = evidence_[keys[j]].on;
+
+    // 3) prune stale cells
+    if (frame_idx_ % 50 == 0) {
+        for (auto it = evidence_.begin(); it != evidence_.end();) {
+            const double e = it->second.e * std::pow(params_.evidence_decay, frame_idx_ - it->second.last);
+            it = (e < 0.05) ? evidence_.erase(it) : std::next(it);
+        }
+    }
 }
 
 

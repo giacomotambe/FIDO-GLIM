@@ -1,45 +1,41 @@
 {
   "dynamic_cluster_extractor": {
-    "_comment_dbscan": "=== DBSCAN — voxel_resolution=0.25m, eps = eps_voxel_factor * 0.25 ===",
+    "_comment_dbscan": "=== DBSCAN \u2014 voxel_resolution=0.25m, eps = eps_voxel_factor * 0.25 ===",
     "eps_voxel_factor": 1.5,
     "min_pts": 2,
     "knn_max_neighbors": 32,
     "min_cluster_voxels": 3,
     "min_points_for_bbox": 3,
-
     "_comment_bbox": "=== Bounding-box dimensional pre-filter ===",
     "bbox_min_extent": 0.1,
     "bbox_max_extent": 4.0,
     "bbox_min_volume": 0.0001,
     "bbox_max_volume": 1000.0,
-
     "_comment_nms": "=== NMS (non-maximum suppression) ===",
     "cluster_iou_threshold": 0.1,
-
-    "_comment_peer_merge": "=== Peer merging: fonde bbox vicine in una sola più grande. 0=disabilitato ===",
-    
+    "_comment_peer_merge": "=== Peer merging: fonde bbox vicine in una sola pi\u00f9 grande. 0=disabilitato ===",
     "peer_merge_distance_outdoor": 2.8,
     "peer_merge_distance_indoor": 0.01,
-
     "_comment_tracking": "=== Cluster tracking ===",
     "track_match_distance": 2.0,
     "track_match_iou": 0.05,
     "track_max_missed": 5,
-
     "_comment_hysteresis": "=== Hysteresis: bbox flagged dynamic only after this many consecutive confirmed-dynamic frames ===",
     "min_dynamic_frames": 2,
-
     "_comment_permanent": "=== Permanent state: lock track after N consecutive frames in same state (0 = disabled) ===",
     "permanent_dynamic_frames": 8,
     "permanent_static_frames": 20,
-
     "_comment_history": "=== Historical bbox check: past-frame bboxes of confirmed-dynamic tracks used in contains_inflated ===",
     "track_bbox_history_size": 5,
-
     "_comment_prediction": "=== Constant-velocity prediction for association, faster hysteresis for fast tracks, unlock of PERMANENT_STATIC ===",
     "use_motion_prediction": true,
     "fast_track_speed": 0.0,
     "fast_track_min_dynamic_frames": 1,
-    "permanent_unlock_frames": 2
+    "permanent_unlock_frames": 2,
+    "use_centroid_association": true,
+    "assoc_gate_base": 0.8,
+    "assoc_gate_per_range": 0.03,
+    "assoc_gate_per_missed": 0.3,
+    "release_static_frames": 0
   }
 }

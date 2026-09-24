@@ -77,6 +77,7 @@ bool BoundingBox::contains_bbox(const BoundingBox& inner) const {
 void BoundingBox::transform(const Eigen::Isometry3d& T) {
     // Aggiorna centro e rotazione
     center = T * center;
+    if (has_centroid_) centroid_ = T * centroid_;
     rotation = T.linear() * rotation;
 
     // Aggiorna la matrice inversa per contains()

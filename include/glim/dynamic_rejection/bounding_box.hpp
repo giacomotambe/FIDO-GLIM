@@ -45,6 +45,10 @@ public:
     // -----------------------------------------------------------------------
     const Eigen::Vector3d& get_size()     const { return size; }
     const Eigen::Vector3d& get_center()   const { return center; }
+    /// Mean of the cluster points (more stable than the AABB center under shape changes).
+    /// Falls back to the AABB center when not set.
+    const Eigen::Vector3d& get_centroid() const { return has_centroid_ ? centroid_ : center; }
+    void set_centroid(const Eigen::Vector3d& c) { centroid_ = c; has_centroid_ = true; }
     const Eigen::Matrix3d& get_rotation() const { return rotation; }
     bool is_dynamic_bbox() const { return is_dynamic; }
     void set_dynamic(bool dynamic) { is_dynamic = dynamic; }
@@ -80,6 +84,8 @@ private:
     bool is_dynamic;
     bool is_locked_ = false;  ///< True when the track has reached a permanent dynamic/static state.
     bool strong_motion_ = false;  ///< Per-frame strong motion evidence (see has_strong_motion()).
+    Eigen::Vector3d centroid_ = Eigen::Vector3d::Zero();
+    bool has_centroid_ = false;
     int  track_id;  ///< -1 = untracked / phantom
     // Precomputed for contains()
     Eigen::Matrix3d R_inv;
