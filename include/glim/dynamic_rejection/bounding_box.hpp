@@ -46,13 +46,19 @@ public:
     const Eigen::Vector3d& get_size()     const { return size; }
     const Eigen::Vector3d& get_center()   const { return center; }
     const Eigen::Matrix3d& get_rotation() const { return rotation; }
-    const bool is_dynamic_bbox() const { return is_dynamic; }
+    bool is_dynamic_bbox() const { return is_dynamic; }
     void set_dynamic(bool dynamic) { is_dynamic = dynamic; }
 
     /// A locked bbox has reached a permanent state and propagate_to_clusters()
     /// must not override its is_dynamic flag.
     bool is_locked()         const { return is_locked_; }
     void set_locked(bool v)        { is_locked_ = v; }
+
+    /// Set by propagate_to_clusters() when the per-frame dynamic-voxel ratio is far
+    /// above the propagation threshold. Used by the tracker to unlock tracks that
+    /// were permanently locked as STATIC (e.g. a parked car that starts moving).
+    bool has_strong_motion() const { return strong_motion_; }
+    void set_strong_motion(bool v)  { strong_motion_ = v; }
 
     int  get_track_id() const { return track_id; }
     void set_track_id(int id)  { track_id = id; }
@@ -73,6 +79,7 @@ private:
     Eigen::Matrix3d rotation;
     bool is_dynamic;
     bool is_locked_ = false;  ///< True when the track has reached a permanent dynamic/static state.
+    bool strong_motion_ = false;  ///< Per-frame strong motion evidence (see has_strong_motion()).
     int  track_id;  ///< -1 = untracked / phantom
     // Precomputed for contains()
     Eigen::Matrix3d R_inv;

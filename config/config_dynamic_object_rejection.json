@@ -23,6 +23,15 @@
     "cluster_rotation_scale": 3.0,
     "w_distance": 0.16,
     "w_velocity": 0.0,
-    "velocity_static_threshold": 0.0
+    "velocity_static_threshold": 0.0,
+
+    "_comment_new": "=== fix/dynamic-rejection: new parameters ===",
+    "min_voxel_points": -1,
+    "static_cluster_penalty_factor": 0.5,
+    "unmatched_dynamic_margin": 1.0,
+    "long_baseline_frames": 3,
+    "w_shift_long": 0.5,
+    "keep_voxel_evidence": true,
+    "unlock_ratio_factor": 2.0
   }
 }

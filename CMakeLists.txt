@@ -16,6 +16,7 @@ option(BUILD_WITH_MARCH_NATIVE "Build with -march=native" OFF)
 option(BUILD_WITH_OPENCV "Build with OpenCV to support camera images" ON)
 option(BUILD_WITH_DYNAMIC_REJECTION_VOXEL "Build with dynamic voxel-based object rejection" OFF)
 option(BUILD_WITH_DYNAMIC_REJECTION_BBOX "Build with dynamic bounding box-based object rejection" ON)
+option(BUILD_DYNAMIC_REJECTION_TESTS "Build unit tests for the dynamic rejection module" OFF)
 
 if(BUILD_WITH_MARCH_NATIVE)
   add_definitions(-march=native)
@@ -305,4 +306,14 @@ if(DEFINED ENV{ROS_VERSION})
     )
     install(DIRECTORY config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
   endif()
+endif()
+
+#################
+## Unit tests  ##
+#################
+if(BUILD_DYNAMIC_REJECTION_TESTS)
+  add_executable(test_dynamic_rejection test/test_dynamic_rejection.cpp)
+  target_link_libraries(test_dynamic_rejection glim)
+  enable_testing()
+  add_test(NAME test_dynamic_rejection COMMAND test_dynamic_rejection)
 endif()

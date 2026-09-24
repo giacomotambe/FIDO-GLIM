@@ -1,5 +1,7 @@
 #pragma once
 
+#include <deque>
+#include <utility>
 #include <vector>
 #include <glim/preprocess/preprocessed_frame.hpp>
 #include <glim/dynamic_rejection/dynamic_voxelmap_cpu.hpp>
@@ -31,10 +33,11 @@ public:
     double w_neighbor;
     double w_cluster;
     double w_history;
-    double w_history_dynamic;  ///< Score bonus per history frame in which the voxel was dynamic.
-    double points_limit;
+    double w_history_dynamic;  ///< UNUSED (kept for config compatibility).
+    double points_limit;       ///< Legacy min-points gate: voxel needs >= points_limit * voxel_res * 100 points (used when min_voxel_points < 0).
+    int    min_voxel_points;   ///< Minimum raw points per voxel to be scored. < 0 = use legacy points_limit formula.
     // History
-    double history_factor;
+    double history_factor;     ///< UNUSED (kept for config compatibility).
     int    frame_num_memory;
     // Cluster propagation
     double cluster_propagation_threshold;
@@ -47,6 +50,15 @@ public:
     double w_distance;                  ///< Negative weight on voxel distance from origin. Score -= w_distance * dist. Suppresses far-range false positives.
     double w_velocity;                  ///< Weight on cluster EMA speed. Score += w_velocity * (speed - threshold). Positive above threshold, negative below.
     double velocity_static_threshold;   ///< Speed [m/s] below which the cluster is treated as static (score contribution becomes negative).
+    double static_cluster_penalty_factor; ///< Score -= w_cluster * factor for voxels outside every dynamic bbox. (was hard-coded 0.5)
+    double unmatched_dynamic_margin;      ///< Score assigned to unmatched voxels in a dynamic bbox = threshold + margin. (was hard-coded 1.0)
+    // Long-baseline comparison (slow objects)
+    int    long_baseline_frames;          ///< Also compare the voxel against frame t-k (k = this value). 0/1 = disabled.
+    double w_shift_long;                  ///< Weight of the long-baseline centroid shift. Score uses max(w_shift*shift, w_shift_long*shift_long).
+    // Final voxel assignment
+    bool   keep_voxel_evidence;           ///< Keep voxels classified dynamic by per-voxel scoring even when outside every bbox.
+    // Permanent-static unlock
+    double unlock_ratio_factor;           ///< A cluster shows "strong motion" when its dynamic ratio > factor * propagation threshold (also for locked clusters).
     // Misc
     int num_threads;
 };
@@ -142,6 +154,15 @@ private:
     // Pipeline steps (called in order inside reject())
     // -----------------------------------------------------------------------
 
+    /// Build voxel_bboxes_ (single O(nvox * n_bbox) pass, parallel).
+    void index_voxel_bboxes(
+        const gtsam_points::DynamicVoxelMapCPU& voxelmap,
+        const std::vector<BoundingBox>&         cluster_bboxes);
+
+    /// Look up the voxel of `current` whose centroid is closest to p (in the frame of `map`),
+    /// exact cell first then 26-neighbour fallback. Returns -1 if none within 2 voxels.
+    int match_voxel(const gtsam_points::DynamicVoxelMapCPU& map, const Eigen::Vector3d& p, double voxel_res) const;
+
     /// Per-voxel scoring against the previous voxelmap.
     /// Populates dynamic_voxels_indices_ and dynamic_voxels_neighbor_indices_.
     void score_voxels(
@@ -199,8 +220,14 @@ private:
     DynamicObjectRejectionParamsCPU params_;
 
     /// Ring buffer of past voxelmaps (oldest → newest).
-    std::vector<gtsam_points::DynamicVoxelMapCPU::Ptr> voxelmap_history_;
-    std::vector<Eigen::Isometry3d> pose_history_; // optional separate history of wall-only voxelmaps
+    std::deque<gtsam_points::DynamicVoxelMapCPU::Ptr> voxelmap_history_;
+    /// pose_history_[i] maps points from the sensor frame of voxelmap_history_[i]
+    /// into the sensor frame of voxelmap_history_[i-1] (Identity for the first frame).
+    std::deque<Eigen::Isometry3d> pose_history_;
+    /// Per-voxel list of (bbox index, in_base) built once per frame.
+    /// in_base == false means the voxel is only inside the velocity-inflated zone
+    /// of a bbox that was dynamic at the time of indexing.
+    std::vector<std::vector<std::pair<int, bool>>> voxel_bboxes_;
     
 
     std::vector<int> dynamic_voxels_neighbor_indices_;

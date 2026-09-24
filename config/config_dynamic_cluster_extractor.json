@@ -34,6 +34,12 @@
     "permanent_static_frames": 20,
 
     "_comment_history": "=== Historical bbox check: past-frame bboxes of confirmed-dynamic tracks used in contains_inflated ===",
-    "track_bbox_history_size": 5
+    "track_bbox_history_size": 5,
+
+    "_comment_prediction": "=== Constant-velocity prediction for association, faster hysteresis for fast tracks, unlock of PERMANENT_STATIC ===",
+    "use_motion_prediction": true,
+    "fast_track_speed": 0.8,
+    "fast_track_min_dynamic_frames": 1,
+    "permanent_unlock_frames": 2
   }
 }

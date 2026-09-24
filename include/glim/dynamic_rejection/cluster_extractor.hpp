@@ -29,6 +29,7 @@ struct Track {
     int             dynamic_frames = 0;   ///< Consecutive frames confirmed dynamic by propagate_to_clusters()
     int             static_frames  = 0;   ///< Consecutive frames confirmed static by propagate_to_clusters()
     PermanentState  permanent_state = PermanentState::NONE;
+    int             unlock_frames  = 0;   ///< Consecutive strong-motion frames while PERMANENT_STATIC
     Eigen::Vector3d velocity = Eigen::Vector3d::Zero();  ///< EMA-smoothed velocity [m/s] in current sensor frame
     std::deque<BoundingBox> bbox_history;  ///< Recent past bboxes in current sensor frame (oldest front, newest back)
 };
@@ -72,6 +73,10 @@ public:
     int    permanent_dynamic_frames;  ///< Consecutive dynamic frames to lock track as permanently dynamic. 0 = disabled. Default: 10
     int    permanent_static_frames;   ///< Consecutive static frames to lock track as permanently static.  0 = disabled. Default: 10
     int    track_bbox_history_size;   ///< Number of past bboxes stored per track for historical inflated-zone checks. Default: 5
+    bool   use_motion_prediction;     ///< Predict track position with constant velocity before association. Default: true
+    double fast_track_speed;          ///< XY speed [m/s] above which a track uses fast_track_min_dynamic_frames. <= 0 = disabled. Default: 0.8
+    int    fast_track_min_dynamic_frames; ///< Hysteresis for fast tracks (lower latency). Default: 1
+    int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
 };
 
 // ===========================================================================
@@ -114,7 +119,11 @@ private:
     /// Read-only pass: propagate track ID and is_dynamic from track history onto fresh bboxes
     /// BEFORE NMS/merge so that bboxes with distinct known tracks are protected from
     /// suppression or absorption by each other.
-    void label_bboxes_from_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current) const;
+    void label_bboxes_from_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current, double dt) const;
+    /// Consecutive confirmed-dynamic frames required before the track is flagged dynamic.
+    int  required_dynamic_frames(const Track& t) const;
+    /// Track bbox moved to the current frame and shifted by velocity * dt (constant-velocity prediction).
+    BoundingBox predicted_bbox(const Track& t, const Eigen::Isometry3d& T_to_current, double dt) const;
 
     /// Match bboxes to tracks by overlap, assign IDs, create/prune tracks.
     /// dt: time elapsed since last call [s], used for velocity estimation (0 = skip).

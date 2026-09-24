@@ -14,6 +14,7 @@
 #include <glim/dynamic_rejection/cluster_extractor.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <numeric>
 #include <spdlog/spdlog.h>
@@ -63,6 +64,10 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     permanent_dynamic_frames  = config.param<int>("dynamic_cluster_extractor", "permanent_dynamic_frames",  10);
     permanent_static_frames   = config.param<int>("dynamic_cluster_extractor", "permanent_static_frames",   10);
     track_bbox_history_size   = config.param<int>("dynamic_cluster_extractor", "track_bbox_history_size",   5);
+    use_motion_prediction         = config.param<bool>  ("dynamic_cluster_extractor", "use_motion_prediction",         true);
+    fast_track_speed              = config.param<double>("dynamic_cluster_extractor", "fast_track_speed",              0.8);
+    fast_track_min_dynamic_frames = config.param<int>   ("dynamic_cluster_extractor", "fast_track_min_dynamic_frames", 1);
+    permanent_unlock_frames       = config.param<int>   ("dynamic_cluster_extractor", "permanent_unlock_frames",       2);
 
     spdlog::debug("[cluster_extractor] eps_factor={:.2f} min_pts={} knn_max={} "
                   "min_cluster_voxels={} min_points_bbox={} "
@@ -157,14 +162,16 @@ std::vector<BoundingBox> DynamicClusterExtractor::extract_clusters(
         const double dt = (last_stamp_ > 0.0 && stamp > last_stamp_) ? (stamp - last_stamp_) : 0.0;
         last_stamp_ = stamp;
 
+        // getPose() = T_world_sensor. Maps previous-sensor-frame quantities into the
+        // current sensor frame: T_cur^-1 * T_prev (was (T_cur * T_prev^-1)^-1, a world-frame delta).
         const Eigen::Isometry3d cur_pose     = pose_kalman_filter_->getPose();
-        const Eigen::Isometry3d T_to_current = (cur_pose * last_pose_.inverse()).inverse();
+        const Eigen::Isometry3d T_to_current = cur_pose.inverse() * last_pose_;
         last_pose_ = cur_pose;
 
         // Label bboxes with historical track state BEFORE NMS/merge so that
         // bboxes with distinct known tracks are protected from suppression/absorption.
         if (!tracks_.empty()) {
-            label_bboxes_from_tracks(bboxes, T_to_current);
+            label_bboxes_from_tracks(bboxes, T_to_current, dt);
         }
 
         bboxes = nms3D(bboxes, params_.cluster_iou_threshold);
@@ -513,9 +520,30 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_nearby_clusters(
 // will re-assign it correctly based on hysteresis after NMS/merge.
 // ===========================================================================
 
+int DynamicClusterExtractor::required_dynamic_frames(const Track& t) const {
+    if (params_.fast_track_speed > 0.0 &&
+        std::hypot(t.velocity.x(), t.velocity.y()) > params_.fast_track_speed)
+        return std::min(params_.fast_track_min_dynamic_frames, params_.min_dynamic_frames);
+    return params_.min_dynamic_frames;
+}
+
+BoundingBox DynamicClusterExtractor::predicted_bbox(
+    const Track& t, const Eigen::Isometry3d& T_to_current, double dt) const
+{
+    BoundingBox b = t.last_bbox;
+    b.transform(T_to_current);
+    if (params_.use_motion_prediction && dt > 0.0) {
+        Eigen::Isometry3d shift = Eigen::Isometry3d::Identity();
+        shift.translation() = (T_to_current.linear() * t.velocity) * dt;
+        b.transform(shift);
+    }
+    return b;
+}
+
 void DynamicClusterExtractor::label_bboxes_from_tracks(
     std::vector<BoundingBox>& bboxes,
-    const Eigen::Isometry3d&  T_to_current) const
+    const Eigen::Isometry3d&  T_to_current,
+    double                    dt) const
 {
     const double D2 = params_.track_match_distance * params_.track_match_distance;
 
@@ -525,12 +553,10 @@ void DynamicClusterExtractor::label_bboxes_from_tracks(
         int    best_tid = -1;
 
         for (const auto& t : tracks_) {
-            const Eigen::Vector3d c_curr = T_to_current * t.center;
-            if ((c_curr - bbox.get_center()).squaredNorm() > D2) continue;
+            const BoundingBox pred = predicted_bbox(t, T_to_current, dt);
+            if ((pred.get_center() - bbox.get_center()).squaredNorm() > D2) continue;
 
-            BoundingBox last_curr = t.last_bbox;
-            last_curr.transform(T_to_current);
-            const double ov = last_curr.overlap(bbox);
+            const double ov = pred.overlap(bbox);
             if (ov < params_.track_match_iou || ov <= best_ov) continue;
 
             best_ov  = ov;
@@ -540,7 +566,7 @@ void DynamicClusterExtractor::label_bboxes_from_tracks(
             } else if (t.permanent_state == PermanentState::DYNAMIC) {
                 is_dyn = true;
             } else {
-                is_dyn = (t.dynamic_frames >= params_.min_dynamic_frames);
+                is_dyn = (t.dynamic_frames >= required_dynamic_frames(t));
             }
         }
         bbox.set_dynamic(is_dyn);
@@ -551,9 +577,9 @@ void DynamicClusterExtractor::label_bboxes_from_tracks(
 // ===========================================================================
 // update_tracks()
 //
-// Overlap-based tracking: no velocity estimation.
-// Matching criterion: center distance < track_match_distance (cheap gate)
-//                     AND overlap > track_match_iou.
+// Overlap-based tracking with constant-velocity prediction.
+// Matching criterion: predicted center distance < track_match_distance (cheap gate)
+//                     AND overlap(predicted bbox, bbox) > track_match_iou.
 // Greedy assignment ranked by overlap (best overlap first).
 // ===========================================================================
 
@@ -565,14 +591,21 @@ void DynamicClusterExtractor::update_tracks(
     const int N_tracks = static_cast<int>(tracks_.size());
     const int N_bboxes = static_cast<int>(bboxes.size());
 
-    // Transform track centers and all history into current sensor frame.
+    // Predicted bboxes (computed from the previous-frame state).
+    std::vector<BoundingBox> predicted;
+    predicted.reserve(N_tracks);
+    for (const auto& t : tracks_)
+        predicted.push_back(predicted_bbox(t, T_to_current, dt));
+
+    // Transform track state and history into current sensor frame.
     for (auto& t : tracks_) {
-        t.center = T_to_current * t.center;
+        t.center   = T_to_current * t.center;
+        t.velocity = T_to_current.linear() * t.velocity;
         t.last_bbox.transform(T_to_current);
         for (auto& hbbox : t.bbox_history)
             hbbox.transform(T_to_current);
     }
-        
+
 
     // Build candidate pairs gated by distance, ranked by overlap.
     struct Pair { int t_idx, b_idx; double overlap; };
@@ -582,8 +615,8 @@ void DynamicClusterExtractor::update_tracks(
 
     for (int t = 0; t < N_tracks; ++t) {
         for (int b = 0; b < N_bboxes; ++b) {
-            if ((tracks_[t].center - bboxes[b].get_center()).squaredNorm() > D2) continue;
-            const double ov = tracks_[t].last_bbox.overlap(bboxes[b]);
+            if ((predicted[t].get_center() - bboxes[b].get_center()).squaredNorm() > D2) continue;
+            const double ov = predicted[t].overlap(bboxes[b]);
             if (ov >= params_.track_match_iou)
                 pairs.push_back({t, b, ov});
         }
@@ -604,12 +637,11 @@ void DynamicClusterExtractor::update_tracks(
         Track& t = tracks_[p.t_idx];
 
         // Velocity estimation: displacement of the compensated center in m/s.
-        // t.center has already been transformed to the current frame (line ~497).
+        // t.center / t.velocity are already expressed in the current frame.
         if (dt > 0.0) {
             const Eigen::Vector3d disp = bboxes[p.b_idx].get_center() - t.center;
             const Eigen::Vector3d vel_meas = disp / dt;
-            // EMA: rotate previous estimate into current frame before blending.
-            t.velocity = 0.6 * (T_to_current.rotation() * t.velocity) + 0.4 * vel_meas;
+            t.velocity = 0.6 * t.velocity + 0.4 * vel_meas;   // EMA
         }
         bboxes[p.b_idx].set_velocity(t.velocity);
 
@@ -629,7 +661,7 @@ void DynamicClusterExtractor::update_tracks(
             bboxes[p.b_idx].set_dynamic(false);
             bboxes[p.b_idx].set_locked(true);
         } else {
-            bboxes[p.b_idx].set_dynamic(t.dynamic_frames >= params_.min_dynamic_frames);
+            bboxes[p.b_idx].set_dynamic(t.dynamic_frames >= required_dynamic_frames(t));
             bboxes[p.b_idx].set_locked(false);
         }
         t.last_bbox     = bboxes[p.b_idx];
@@ -653,7 +685,7 @@ void DynamicClusterExtractor::update_tracks(
         t.missed_frames = 0;
         tracks_.push_back(t);
         bboxes[b].set_track_id(t.id);
-        bboxes[b].set_dynamic(false);  // Mark tracks as dynamic for downstream use.
+        bboxes[b].set_dynamic(false);  // New tracks start static (hysteresis).
         spdlog::debug("[tracker] new track={} at ({:.2f},{:.2f},{:.2f})",
                       t.id, t.center.x(), t.center.y(), t.center.z());
     }
@@ -685,7 +717,23 @@ void DynamicClusterExtractor::update_dynamic_feedback(
     const std::vector<BoundingBox>& post_rejection_bboxes)
 {
     for (auto& track : tracks_) {
-        // Permanently locked tracks keep their state for their entire lifetime.
+        // PERMANENT_DYNAMIC keeps its state for the track lifetime.
+        // PERMANENT_STATIC is released after permanent_unlock_frames consecutive frames
+        // of strong motion evidence (e.g. a parked car that starts moving).
+        if (track.permanent_state == PermanentState::STATIC && params_.permanent_unlock_frames > 0) {
+            bool strong = false;
+            for (const auto& bbox : post_rejection_bboxes)
+                if (bbox.get_track_id() == track.id) { strong = bbox.has_strong_motion(); break; }
+            track.unlock_frames = strong ? track.unlock_frames + 1 : 0;
+            if (track.unlock_frames >= params_.permanent_unlock_frames) {
+                track.permanent_state = PermanentState::NONE;
+                track.static_frames   = 0;
+                track.dynamic_frames  = track.unlock_frames;   // strong motion counts as dynamic evidence
+                track.unlock_frames   = 0;
+                spdlog::debug("[tracker] track={} PERMANENT_STATIC released (strong motion)", track.id);
+            }
+            continue;
+        }
         if (track.permanent_state != PermanentState::NONE) {
             spdlog::debug("[tracker] track={} PERMANENT_{}", track.id,
                           track.permanent_state == PermanentState::DYNAMIC ? "DYNAMIC" : "STATIC");
@@ -751,7 +799,7 @@ std::vector<BoundingBox> DynamicClusterExtractor::get_dynamic_track_history() co
         if (t.bbox_history.empty()) continue;
         const bool is_confirmed =
             (t.permanent_state == PermanentState::DYNAMIC) ||
-            (t.permanent_state == PermanentState::NONE && t.dynamic_frames >= params_.min_dynamic_frames);
+            (t.permanent_state == PermanentState::NONE && t.dynamic_frames >= required_dynamic_frames(t));
         if (!is_confirmed) continue;
         for (const auto& hbbox : t.bbox_history)
             result.push_back(hbbox);

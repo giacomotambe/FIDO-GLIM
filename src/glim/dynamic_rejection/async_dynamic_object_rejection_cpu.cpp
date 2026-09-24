@@ -146,54 +146,6 @@ void AsyncDynamicObjectRejection::run() {
             // Enqueue outputs
             // ------------------------------------------------------------------
 
-            // if (cluster_extractor_ && wf.voxelmap && !cluster_map.empty()) {
-            //     // Conta il numero di cluster dalla mappa
-            //     int num_clusters = 0;
-            //     for (int cid : cluster_map)
-            //         if (cid >= 0) num_clusters = std::max(num_clusters, cid + 1);
- 
-            //     if (num_clusters > 0) {
-            //         // Raccoglie i punti solo dei cluster dinamici
-            //         // (almeno un voxel del cluster ha is_dynamic == true
-            //         //  dopo la propagazione)
-            //         const int nvox = static_cast<int>(cluster_map.size());
-            //         std::vector<bool> cluster_is_dynamic(num_clusters, false);
-            //         for (int i = 0; i < nvox; ++i) {
-            //             const int cid = cluster_map[i];
-            //             if (cid >= 0 && wf.voxelmap->lookup_voxel(i).is_dynamic)
-            //                 cluster_is_dynamic[cid] = true;
-            //         }
- 
-            //         // Costruisce point_clusters solo per i cluster dinamici
-            //         std::vector<std::vector<Eigen::Vector4d>> dyn_point_clusters(num_clusters);
-            //         for (int i = 0; i < nvox; ++i) {
-            //             const int cid = cluster_map[i];
-            //             if (cid >= 0) {
-            //                 const auto& vox = wf.voxelmap->lookup_voxel(i);
-            //                 dyn_point_clusters[cid].insert(
-            //                     dyn_point_clusters[cid].end(),
-            //                     vox.voxel_points.begin(),
-            //                     vox.voxel_points.end());
-            //             }
-            //         }
- 
-            //         // Rimuove cluster vuoti (statici) e calcola OBB
-            //         dyn_point_clusters.erase(
-            //             std::remove_if(dyn_point_clusters.begin(), dyn_point_clusters.end(),
-            //                 [](const std::vector<Eigen::Vector4d>& c){ return c.empty(); }),
-            //             dyn_point_clusters.end());
- 
-            //         auto bboxes = cluster_extractor_->compute_bounding_boxes(dyn_point_clusters);
- 
-            //         if (!bboxes.empty()) {
-            //             cluster_bbox_queue_.push_back(std::move(bboxes));
-            //             spdlog::debug("[dynamic_rejection][async] {} dynamic cluster bboxes enqueued",
-            //                           cluster_bbox_queue_.size());
-            //         }
-            //     }
-            // }
-
-
             wall_result_queue.push_back(wf);
             output_frame_queue.push_back(dr.static_frame);
             cluster_bbox_queue_.push_back(cluster_bboxes);
