@@ -17,6 +17,8 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <functional>
+#include <unordered_map>
 #include <spdlog/spdlog.h>
 #include <gtsam_points/ann/kdtree.hpp>
 #include <glim/util/config.hpp>
@@ -675,9 +677,27 @@ void DynamicClusterExtractor::update_tracks(
                 const double d = (predicted[t].get_centroid() - bboxes[b].get_centroid()).norm();
                 if (d <= gate) cost[t][b] = d;
             }
-        const auto assign = hungarian(cost, N_tracks, N_bboxes);
+        // Solve independently on each connected component of the gating graph
+        // (identical optimum, but O(sum k^3) instead of O(n^3) with ~hundreds of clusters outdoors).
+        std::vector<int> parent(N_tracks + N_bboxes);
+        std::iota(parent.begin(), parent.end(), 0);
+        std::function<int(int)> find = [&](int x) { return parent[x] == x ? x : parent[x] = find(parent[x]); };
         for (int t = 0; t < N_tracks; ++t)
-            if (assign[t] >= 0) pairs.push_back({t, assign[t], 1.0 / (1e-3 + cost[t][assign[t]])});
+            for (int b = 0; b < N_bboxes; ++b)
+                if (cost[t][b] < kInf) parent[find(t)] = find(N_tracks + b);
+        std::unordered_map<int, std::pair<std::vector<int>, std::vector<int>>> comps;
+        for (int t = 0; t < N_tracks; ++t) comps[find(t)].first.push_back(t);
+        for (int b = 0; b < N_bboxes; ++b) comps[find(N_tracks + b)].second.push_back(b);
+        for (const auto& [root, tb] : comps) {
+            const auto& ts = tb.first; const auto& bs = tb.second;
+            if (ts.empty() || bs.empty()) continue;
+            std::vector<std::vector<double>> sub(ts.size(), std::vector<double>(bs.size()));
+            for (size_t i = 0; i < ts.size(); ++i)
+                for (size_t k = 0; k < bs.size(); ++k) sub[i][k] = cost[ts[i]][bs[k]];
+            const auto assign = hungarian(sub, static_cast<int>(ts.size()), static_cast<int>(bs.size()));
+            for (size_t i = 0; i < ts.size(); ++i)
+                if (assign[i] >= 0) pairs.push_back({ts[i], bs[assign[i]], 1.0 / (1e-3 + sub[i][assign[i]])});
+        }
     } else {
         for (int t = 0; t < N_tracks; ++t) {
             for (int b = 0; b < N_bboxes; ++b) {
