@@ -64,7 +64,16 @@ public:
     double fast_confirm_ratio_factor;     ///< Remove a cluster in the same frame (no hysteresis) if ratio > factor * threshold ...
     double fast_confirm_min_vis;          ///< ... and its mean free-space fraction >= this. (factor <= 0 = off)
     double moving_vis_alt;                ///< A cluster passes the speed gate also if its mean free-space fraction >= this (> 1 = off).
-    double foot_min_hag;                  ///< Near-ground / ground voxels inside the XY footprint of a confirmed tall dynamic bbox and higher than this above ground are dynamic (< 0 = off).    ///< Voxels in velocity-inflated / historical zones need their own evidence (score or visibility).
+    double foot_min_hag;
+    // Point-level refinement (final step)
+    bool   point_refine_enabled;          ///< Label individual points: grow from dynamic seeds, veto points with static free-space evidence.
+    double point_grow_radius0;            ///< Growth radius at range 0 [m].
+    double point_grow_radius_k;           ///< Growth radius increase per metre of range.
+    double point_grow_radius_max;         ///< Growth radius cap [m].
+    double point_bbox_margin;             ///< Growth stays inside confirmed-dynamic bboxes enlarged by this margin [m].
+    bool   point_static_veto;             ///< Points whose past rays saw a surface at the same range stay static.
+    int    point_knn;
+    bool   point_grow_on_visibility;      ///< Also grow (outside bboxes) into points that appeared in free space.                     ///< Neighbours examined per grown point.                  ///< Near-ground / ground voxels inside the XY footprint of a confirmed tall dynamic bbox and higher than this above ground are dynamic (< 0 = off).    ///< Voxels in velocity-inflated / historical zones need their own evidence (score or visibility).
     // Pose handling
     bool   apply_lidar_imu_extrinsic;     ///< getPose() is T_world_imu: convert with T_imu_lidar from config_sensors (true in GLIM).
     Eigen::Isometry3d T_imu_lidar = Eigen::Isometry3d::Identity();
@@ -271,7 +280,11 @@ private:
     std::deque<Eigen::Isometry3d> pose_history_;
     std::deque<Eigen::Isometry3d> abs_pose_history_;   ///< T_world_sensor of each voxelmap_history_ entry.
     std::vector<float> vis_frac_;
-    std::vector<float> hag_;              ///< Per-voxel height above local ground [m].
+    std::vector<float> hag_;
+    std::vector<std::vector<uint8_t>> vis_pt_;     ///< Per voxel, per point: 0 unknown, 1 appeared in free space, 2 consistent with the past.
+    std::vector<std::vector<uint8_t>> point_dyn_;  ///< Per voxel, per point final label (empty = use voxel label).
+    std::vector<BoundingBox> confirmed_bboxes_;    ///< Confirmed-dynamic bboxes of this frame.
+    void refine_points(const gtsam_points::DynamicVoxelMapCPU& voxelmap);              ///< Per-voxel height above local ground [m].
     void compute_ground_heights(const gtsam_points::DynamicVoxelMapCPU& voxelmap);
     std::deque<std::vector<float>> range_img_history_;  ///< Range image of each voxelmap_history_ entry (own frame, 3x3 min).
     /// Per-voxel list of (bbox index, in_base) built once per frame.

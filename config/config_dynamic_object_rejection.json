@@ -63,6 +63,13 @@
     "fast_confirm_ratio_factor": 2.0,
     "fast_confirm_min_vis": 0.2,
     "moving_vis_alt": 0.3,
-    "foot_min_hag": -1.0
+    "foot_min_hag": -1.0,
+    "point_refine_enabled": false,
+    "point_grow_radius0": 0.2,
+    "point_grow_radius_k": 0.02,
+    "point_grow_radius_max": 0.5,
+    "point_bbox_margin": 0.3,
+    "point_static_veto": false,
+    "point_knn": 16
   }
 }

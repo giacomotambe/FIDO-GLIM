@@ -86,6 +86,14 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     fast_confirm_ratio_factor      = config.param<double>(k, "fast_confirm_ratio_factor",      2.0);
     fast_confirm_min_vis           = config.param<double>(k, "fast_confirm_min_vis",           0.2);
     moving_vis_alt                 = config.param<double>(k, "moving_vis_alt",                 0.3);
+    point_refine_enabled           = config.param<bool>  (k, "point_refine_enabled",           false);
+    point_grow_radius0             = config.param<double>(k, "point_grow_radius0",             0.2);
+    point_grow_radius_k            = config.param<double>(k, "point_grow_radius_k",            0.02);
+    point_grow_radius_max          = config.param<double>(k, "point_grow_radius_max",          0.5);
+    point_bbox_margin              = config.param<double>(k, "point_bbox_margin",              0.3);
+    point_static_veto              = config.param<bool>  (k, "point_static_veto",              false);
+    point_knn                      = config.param<int>   (k, "point_knn",                      16);
+    point_grow_on_visibility       = config.param<bool>  (k, "point_grow_on_visibility",       false);
     foot_min_hag                   = config.param<double>(k, "foot_min_hag",                   -1.0);
     apply_lidar_imu_extrinsic      = config.param<bool>  (k, "apply_lidar_imu_extrinsic",      true);
     if (apply_lidar_imu_extrinsic) {
@@ -215,6 +223,8 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     propagate_to_neighbors(*wf_result.voxelmap, nvox);
     propagate_to_clusters(*wf_result.voxelmap, cluster_bboxes, historical_bboxes);
     if (params_.evidence_enabled) apply_world_evidence(*wf_result.voxelmap, cur_pose);
+    if (params_.point_refine_enabled) refine_points(*wf_result.voxelmap);
+    else point_dyn_.clear();
 
     // -----------------------------------------------------------------------
     // Split voxel points into static / dynamic buckets
@@ -630,6 +640,7 @@ void DynamicObjectRejectionCPU::compute_visibility(
 {
     const int nvox = nvox_of(voxelmap);
     vis_frac_.assign(nvox, 0.f);
+    vis_pt_.assign(nvox, {});
 
     const double res = params_.visibility_res_deg * M_PI / 180.0;
     const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res));
@@ -661,8 +672,11 @@ void DynamicObjectRejectionCPU::compute_visibility(
             }
         }
         int hits = 0;
-        for (const auto& pt : v.voxel_points) {
-            int votes = 0, seen = 0;
+        auto& st = vis_pt_[j];
+        st.assign(v.voxel_points.size(), 0);
+        for (size_t pi = 0; pi < v.voxel_points.size(); ++pi) {
+            const auto& pt = v.voxel_points[pi];
+            int votes = 0, seen = 0, cons = 0;
             for (size_t a = 0; a < ages.size(); ++a) {
                 const Eigen::Vector3d q = T_past_now[a] * pt.head<3>();     // point in past sensor frame
                 const int c = std::min(cols - 1, static_cast<int>((std::atan2(q.y(), q.x()) + M_PI) / res));
@@ -671,9 +685,12 @@ void DynamicObjectRejectionCPU::compute_visibility(
                 if (!std::isfinite(past)) continue;                            // direction not observed
                 ++seen;
                 const double d = q.norm();
-                if (d < past - std::max(params_.visibility_abs_thr, params_.visibility_rel_thr * d)) ++votes;
+                const double thr = std::max(params_.visibility_abs_thr, params_.visibility_rel_thr * d);
+                if (d < past - thr) ++votes;
+                else if (std::abs(d - past) <= thr) ++cons;                    // a surface was already there
             }
-            if (seen > 0 && 2 * votes > seen) ++hits;                         // majority of past scans agree
+            if (seen > 0 && 2 * votes > seen) { ++hits; st[pi] = 1; }       // majority of past scans agree
+            else if (seen > 0 && 2 * cons > seen) st[pi] = 2;
         }
         vis_frac_[j] = static_cast<float>(hits) / v.voxel_points.size();
     });
@@ -831,6 +848,9 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
                       is_dyn ? "DYNAMIC" : "static", was_dynamic[c] ? "DYNAMIC" : "static");
     }
 
+    confirmed_bboxes_.clear();
+    for (int c = 0; c < n_clusters; ++c) if (was_dynamic[c]) confirmed_bboxes_.push_back(cluster_bboxes[c]);
+
     // Final voxel assignment.
     const auto assign = [&](bool strict) {
         parallel_for_voxels(nvox, params_.num_threads, [&](int j) {
@@ -898,6 +918,74 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
 
 
 // ===========================================================================
+// refine_points()
+// ===========================================================================
+// Point-level labelling on top of the voxel decision:
+//  1. points of dynamic voxels are dynamic, except those whose past rays saw a surface at
+//     the same range (static veto) -> removes halos in mixed boundary voxels;
+//  2. region growing from the dynamic points through a KD-tree, restricted to confirmed
+//     dynamic bboxes (+margin), non-structural, above the ground band and not vetoed
+//     -> recovers borders and fragments that the clustering missed.
+
+void DynamicObjectRejectionCPU::refine_points(const gtsam_points::DynamicVoxelMapCPU& voxelmap)
+{
+    const int nvox = nvox_of(voxelmap);
+    point_dyn_.assign(nvox, {});
+    std::vector<Eigen::Vector4d> pts;
+    std::vector<std::pair<int, int>> owner;
+    for (int j = 0; j < nvox; ++j) {
+        const auto& v = voxelmap.lookup_voxel(j);
+        point_dyn_[j].assign(v.voxel_points.size(), 0);
+        for (size_t k = 0; k < v.voxel_points.size(); ++k) { pts.push_back(v.voxel_points[k]); owner.emplace_back(j, static_cast<int>(k)); }
+    }
+    if (pts.empty()) return;
+    const auto vis_state = [&](int j, int k) -> uint8_t {
+        return (static_cast<int>(vis_pt_.size()) == nvox && !vis_pt_[j].empty()) ? vis_pt_[j][k] : 0;
+    };
+
+    std::vector<uint8_t> lab(pts.size(), 0);
+    std::vector<int> queue;
+    for (size_t i = 0; i < pts.size(); ++i) {
+        const auto [j, k] = owner[i];
+        if (!voxelmap.lookup_voxel(j).is_dynamic) continue;
+        if (params_.point_static_veto && vis_state(j, k) == 2) continue;
+        lab[i] = 1; queue.push_back(static_cast<int>(i));
+    }
+
+    if ((!confirmed_bboxes_.empty() || params_.point_grow_on_visibility) && !queue.empty()) {
+        const auto allowed = [&](int i) {
+            const auto [j, k] = owner[i];
+            const auto& v = voxelmap.lookup_voxel(j);
+            if (v.is_wall || v.is_ground || v.is_outlier) return false;
+            if (!hag_.empty() && hag_[j] < params_.ground_band_m) return false;
+            if (params_.point_static_veto && vis_state(j, k) == 2) return false;
+            const Eigen::Vector3d p = pts[i].head<3>();
+            for (const auto& b : confirmed_bboxes_) {
+                const Eigen::Vector3d d = (p - b.get_center()).cwiseAbs() - 0.5 * b.get_size();
+                if ((d.array() <= params_.point_bbox_margin).all()) return true;
+            }
+            return params_.point_grow_on_visibility && vis_state(j, k) == 1;
+        };
+        gtsam_points::KdTree tree(pts.data(), static_cast<int>(pts.size()));
+        const int kk = std::max(1, params_.point_knn);
+        std::vector<size_t> idx(kk); std::vector<double> sq(kk);
+        for (size_t q = 0; q < queue.size(); ++q) {
+            const int i = queue[q];
+            const double r = std::min(params_.point_grow_radius_max,
+                                      params_.point_grow_radius0 + params_.point_grow_radius_k * pts[i].head<3>().norm());
+            const size_t n = tree.knn_search(pts[i].data(), kk, idx.data(), sq.data());
+            for (size_t m = 0; m < n; ++m) {
+                const int nb = static_cast<int>(idx[m]);
+                if (lab[nb] || sq[m] > r * r || !allowed(nb)) continue;
+                lab[nb] = 1; queue.push_back(nb);
+            }
+        }
+    }
+    for (size_t i = 0; i < pts.size(); ++i) point_dyn_[owner[i].first][owner[i].second] = lab[i];
+}
+
+
+// ===========================================================================
 // collect_points()
 // ===========================================================================
 
@@ -925,8 +1013,18 @@ void DynamicObjectRejectionCPU::collect_points(
         dynamic_tim.reserve(total_pts / 8);
     }
 
+    const bool per_point = static_cast<int>(point_dyn_.size()) == nvox;
     for (int j = 0; j < nvox; ++j) {
         const auto& v = voxelmap.lookup_voxel(j);
+        if (per_point && !point_dyn_[j].empty()) {
+            for (size_t k = 0; k < v.voxel_points.size(); ++k) {
+                const bool d = point_dyn_[j][k];
+                (d ? dynamic_pts : static_pts).push_back(v.voxel_points[k]);
+                if (k < v.voxel_intensities.size()) (d ? dynamic_int : static_int).push_back(v.voxel_intensities[k]);
+                if (k < v.voxel_times.size())       (d ? dynamic_tim : static_tim).push_back(v.voxel_times[k]);
+            }
+            continue;
+        }
 
         auto& pts  = v.is_dynamic ? dynamic_pts : static_pts;
         auto& ints = v.is_dynamic ? dynamic_int : static_int;
