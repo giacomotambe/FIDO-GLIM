@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <mutex>
+#include <limits>
 
 #include <Eigen/Geometry>
 #include <Eigen/Eigenvalues>
@@ -76,6 +77,16 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     noise_deadzone_k               = config.param<double>(k, "noise_deadzone_k",               3.0);
     keep_voxel_evidence            = config.param<bool>  (k, "keep_voxel_evidence",            false);
     unlock_ratio_factor            = config.param<double>(k, "unlock_ratio_factor",            2.0);
+    visibility_enabled             = config.param<bool>  (k, "visibility_enabled",             true);
+    w_visibility                   = config.param<double>(k, "w_visibility",                   0.5);
+    visibility_res_deg             = config.param<double>(k, "visibility_res_deg",             0.7);
+    visibility_abs_thr             = config.param<double>(k, "visibility_abs_thr",             0.3);
+    visibility_rel_thr             = config.param<double>(k, "visibility_rel_thr",             0.03);
+    visibility_min_age             = config.param<int>   (k, "visibility_min_age",             3);
+    visibility_max_age             = config.param<int>   (k, "visibility_max_age",             5);
+    visibility_max_incidence_deg   = config.param<double>(k, "visibility_max_incidence_deg",   75.0);
+    visibility_keep_frac           = config.param<double>(k, "visibility_keep_frac",           2.0);
+    visibility_keep_min_points     = config.param<int>   (k, "visibility_keep_min_points",     2);
     evidence_enabled               = config.param<bool>  (k, "evidence_enabled",               false);
     evidence_resolution            = config.param<double>(k, "evidence_resolution",            0.4);
     evidence_decay                 = config.param<double>(k, "evidence_decay",                 0.7);
@@ -86,6 +97,8 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     // Frame history must hold at least the long-baseline frame.
     if (frame_num_memory < compare_baseline_frames)
         frame_num_memory = compare_baseline_frames;
+    if (visibility_enabled && frame_num_memory < visibility_max_age)
+        frame_num_memory = visibility_max_age;
 
     spdlog::debug("[dynamic_rejection] params loaded");
 }
@@ -141,6 +154,7 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
         spdlog::debug("[dynamic_rejection] first frame — storing reference voxelmap");
         voxelmap_history_.push_back(wf_result.voxelmap);
         pose_history_.push_back(Eigen::Isometry3d::Identity());  // no predecessor: identity delta
+        abs_pose_history_.push_back(pose_kalman_filter_->getPose());
         last_pose_ = pose_kalman_filter_->getPose();
         last_dynamic_frame_ = nullptr;
         result.static_frame  = source_frame;
@@ -172,6 +186,8 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     // -----------------------------------------------------------------------
     auto t0 = std::chrono::steady_clock::now();
     index_voxel_bboxes(*wf_result.voxelmap, cluster_bboxes);
+    if (params_.visibility_enabled) compute_visibility(*wf_result.voxelmap, cur_pose);
+    else vis_frac_.clear();
     score_voxels(*wf_result.voxelmap, *voxelmap_history_.back(), cluster_bboxes, T_delta_pose);
     auto t1 = std::chrono::steady_clock::now();
     spdlog::debug("[dynamic_rejection] score_voxels took {:.1f} ms",
@@ -198,9 +214,12 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     // -----------------------------------------------------------------------
     voxelmap_history_.push_back(wf_result.voxelmap);
     pose_history_.push_back(T_delta_pose);
+    abs_pose_history_.push_back(cur_pose);
     while (static_cast<int>(voxelmap_history_.size()) > params_.frame_num_memory) {
         voxelmap_history_.pop_front();
         pose_history_.pop_front();
+        abs_pose_history_.pop_front();
+        if (!range_img_history_.empty()) range_img_history_.pop_front();
     }
 
     // -----------------------------------------------------------------------
@@ -395,6 +414,10 @@ void DynamicObjectRejectionCPU::score_voxels(
         if (params_.w_velocity > 0.0 && in_any_bbox)
             cur.dynamic_score += params_.w_velocity * (best_cluster_speed - params_.velocity_static_threshold);
 
+        // ---- Visibility: fraction of points that appeared in previously free space ----
+        const double vis = vis_frac_.empty() ? 0.0 : vis_frac_[j];
+        cur.dynamic_score += params_.w_visibility * vis;
+
         // ---- Transform centroid into previous frame and match ----
         const Eigen::Vector3d p_trans = T_delta_pose * cur.mean.head<3>();
         const Eigen::Vector4d p_trans4(p_trans.x(), p_trans.y(), p_trans.z(), 1.0);
@@ -411,10 +434,17 @@ void DynamicObjectRejectionCPU::score_voxels(
 
         if (base_idx < 0) {
             // Tier-1 (confirmed dynamic bbox): the object likely moved out of the
-            // search window -> dynamic. Otherwise inconclusive -> static.
+            // search window -> dynamic. Otherwise decide on the visibility evidence
+            // alone (typical for sparse far objects without a voxel match).
+            const double base_thr = params_.dynamic_score_threshold * motion_scale_;
+            const double thr = was_recently_dynamic ? base_thr * params_.memory_threshold_factor
+                                                    : base_thr * params_.unconstrained_threshold_factor;
             if (possibly_dynamic) {
                 cur.is_dynamic    = true;
                 cur.dynamic_score = params_.dynamic_score_threshold + params_.unmatched_dynamic_margin;
+                mark_dynamic(j, cur.mean);
+            } else if (vis > 0.0 && cur.dynamic_score > thr) {
+                cur.is_dynamic = true;
                 mark_dynamic(j, cur.mean);
             }
             return;
@@ -500,6 +530,95 @@ void DynamicObjectRejectionCPU::score_voxels(
     };
 
     parallel_for_voxels(nvox, params_.num_threads, per_voxel);
+}
+
+
+// ===========================================================================
+// compute_visibility()
+// ===========================================================================
+// Free-space test in the PAST sensor frames (no parallax): for each past scan
+// t-max_age..t-min_age a spherical range image is built from its own points
+// (3x3 min filter, i.e. conservative). Each current point is moved into that past
+// sensor frame; if the past ray in its direction reached clearly beyond it, the
+// point now occupies space that was observed free -> "appeared" (dynamic evidence).
+// Only this direction is used: "farther than before" can be mere disocclusion.
+
+static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapCPU& vm, int rows, int cols, double res) {
+    std::vector<float> img(rows * cols, std::numeric_limits<float>::infinity());
+    const int n = static_cast<int>(vm.gtsam_points::IncrementalVoxelMap<gtsam_points::DynamicGaussianVoxel>::num_voxels());
+    for (int v = 0; v < n; ++v)
+        for (const auto& pt : vm.lookup_voxel(v).voxel_points) {
+            const Eigen::Vector3d q = pt.head<3>();
+            const int c = std::min(cols - 1, static_cast<int>((std::atan2(q.y(), q.x()) + M_PI) / res));
+            const int r = std::min(rows - 1, std::max(0, static_cast<int>((std::atan2(q.z(), q.head<2>().norm()) + M_PI / 2.0) / res)));
+            float& cell = img[r * cols + c];
+            cell = std::min(cell, static_cast<float>(q.norm()));
+        }
+    std::vector<float> out(rows * cols, std::numeric_limits<float>::infinity());
+    for (int r = 0; r < rows; ++r)
+        for (int c = 0; c < cols; ++c) {
+            float m = std::numeric_limits<float>::infinity();
+            for (int dr = -1; dr <= 1; ++dr) {
+                const int rr = r + dr; if (rr < 0 || rr >= rows) continue;
+                for (int dc = -1; dc <= 1; ++dc) m = std::min(m, img[rr * cols + (c + dc + cols) % cols]);
+            }
+            out[r * cols + c] = m;
+        }
+    return out;
+}
+
+void DynamicObjectRejectionCPU::compute_visibility(
+    const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor)
+{
+    const int nvox = nvox_of(voxelmap);
+    vis_frac_.assign(nvox, 0.f);
+
+    const double res = params_.visibility_res_deg * M_PI / 180.0;
+    const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res));
+    const int rows = static_cast<int>(std::ceil(M_PI / res));
+
+    // Range images are cached per history entry (built once, in their own frame).
+    while (range_img_history_.size() < voxelmap_history_.size())
+        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res));
+
+    const int hist = static_cast<int>(voxelmap_history_.size());
+    std::vector<int> ages;
+    for (int age = params_.visibility_min_age; age <= params_.visibility_max_age; ++age)
+        if (hist - age >= 0) ages.push_back(hist - age);
+    if (ages.empty()) return;
+
+    std::vector<Eigen::Isometry3d> T_past_now;
+    for (int idx : ages) T_past_now.push_back(abs_pose_history_[idx].inverse() * T_world_sensor);
+
+    const double cos_max_inc = std::cos(params_.visibility_max_incidence_deg * M_PI / 180.0);
+    parallel_for_voxels(nvox, params_.num_threads, [&](int j) {
+        const auto& v = voxelmap.lookup_voxel(j);
+        if (v.is_wall || v.is_ground || v.is_outlier || v.voxel_points.empty()) return;
+        if (v.voxel_points.size() >= 5) {                                  // grazing-incidence filter
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(v.cov.topLeftCorner<3, 3>());
+            if (es.info() == Eigen::Success) {
+                const Eigen::Vector3d ev = es.eigenvalues();
+                if (ev(0) < 0.1 * ev(1) &&
+                    std::abs(es.eigenvectors().col(0).dot(v.mean.head<3>().normalized())) < cos_max_inc) return;
+            }
+        }
+        int hits = 0;
+        for (const auto& pt : v.voxel_points) {
+            int votes = 0, seen = 0;
+            for (size_t a = 0; a < ages.size(); ++a) {
+                const Eigen::Vector3d q = T_past_now[a] * pt.head<3>();     // point in past sensor frame
+                const int c = std::min(cols - 1, static_cast<int>((std::atan2(q.y(), q.x()) + M_PI) / res));
+                const int r = std::min(rows - 1, std::max(0, static_cast<int>((std::atan2(q.z(), q.head<2>().norm()) + M_PI / 2.0) / res)));
+                const float past = range_img_history_[ages[a]][r * cols + c];
+                if (!std::isfinite(past)) continue;                            // direction not observed
+                ++seen;
+                const double d = q.norm();
+                if (d < past - std::max(params_.visibility_abs_thr, params_.visibility_rel_thr * d)) ++votes;
+            }
+            if (seen > 0 && 2 * votes > seen) ++hits;                         // majority of past scans agree
+        }
+        vis_frac_[j] = static_cast<float>(hits) / v.voxel_points.size();
+    });
 }
 
 
@@ -672,7 +791,9 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
 
         // Per-voxel evidence (Tier 2/3 + neighbour propagation). Previously this was
         // always discarded; keep it when enabled.
-        v.is_dynamic = params_.keep_voxel_evidence && v.is_dynamic;
+        const bool vis_keep = !vis_frac_.empty() && vis_frac_[j] >= params_.visibility_keep_frac &&
+                              static_cast<int>(v.voxel_points.size()) >= params_.visibility_keep_min_points;
+        v.is_dynamic = (params_.keep_voxel_evidence && v.is_dynamic) || vis_keep;
     });
 }
 

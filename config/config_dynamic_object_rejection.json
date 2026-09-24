@@ -40,6 +40,16 @@
     "evidence_decay": 0.7,
     "evidence_gain": 1.0,
     "evidence_on": 1.5,
-    "evidence_off": 0.5
+    "evidence_off": 0.5,
+    "visibility_enabled": true,
+    "w_visibility": 0.5,
+    "visibility_res_deg": 0.7,
+    "visibility_abs_thr": 0.3,
+    "visibility_rel_thr": 0.03,
+    "visibility_min_age": 3,
+    "visibility_max_age": 5,
+    "visibility_max_incidence_deg": 75.0,
+    "visibility_keep_frac": 2.0,
+    "visibility_keep_min_points": 2
   }
 }

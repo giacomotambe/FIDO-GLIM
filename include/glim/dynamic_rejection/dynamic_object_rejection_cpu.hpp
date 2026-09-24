@@ -61,6 +61,17 @@ public:
     double noise_deadzone_k;              ///< Dead zone = max(min_shift_m, k * sigma(range)).
     // Final voxel assignment
     bool   keep_voxel_evidence;           ///< Keep voxels classified dynamic by per-voxel scoring even when outside every bbox.
+    // Range-image visibility check (per-point "appeared in previously free space")
+    bool   visibility_enabled;            ///< Enable the range-image comparison against past scans.
+    double w_visibility;                  ///< Score weight of the fraction of voxel points that appeared in free space.
+    double visibility_res_deg;            ///< Angular resolution of the comparison range image [deg].
+    double visibility_abs_thr;            ///< Point is "appeared" if r_now < r_past - max(abs_thr, rel_thr * r_now) [m].
+    double visibility_rel_thr;            ///< Relative part of the threshold.
+    int    visibility_min_age;            ///< Oldest/youngest past frames used: t-max_age .. t-min_age.
+    int    visibility_max_age;
+    double visibility_max_incidence_deg;
+    double visibility_keep_frac;          ///< Outside every bbox, keep a voxel dynamic if >= this fraction of its points appeared in free space (> 1 = off).
+    int    visibility_keep_min_points;    ///< ... and it has at least this many points.  ///< Ignore current points seen at grazing incidence (surface normal vs ray) above this angle.
     // World-frame dynamic evidence grid (temporal consistency independent of track IDs)
     bool   evidence_enabled;              ///< Enable the world-frame evidence grid.
     double evidence_resolution;           ///< Cell size [m].
@@ -168,6 +179,9 @@ private:
     /// Update the world-frame evidence grid with this frame's labels and relabel voxels from the cell state.
     void apply_world_evidence(gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
 
+    /// Fill vis_frac_ (per voxel fraction of points that appeared in previously free space).
+    void compute_visibility(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
+
     /// Build voxel_bboxes_ (single O(nvox * n_bbox) pass, parallel).
     void index_voxel_bboxes(
         const gtsam_points::DynamicVoxelMapCPU& voxelmap,
@@ -238,6 +252,9 @@ private:
     /// pose_history_[i] maps points from the sensor frame of voxelmap_history_[i]
     /// into the sensor frame of voxelmap_history_[i-1] (Identity for the first frame).
     std::deque<Eigen::Isometry3d> pose_history_;
+    std::deque<Eigen::Isometry3d> abs_pose_history_;   ///< T_world_sensor of each voxelmap_history_ entry.
+    std::vector<float> vis_frac_;
+    std::deque<std::vector<float>> range_img_history_;  ///< Range image of each voxelmap_history_ entry (own frame, 3x3 min).
     /// Per-voxel list of (bbox index, in_base) built once per frame.
     /// in_base == false means the voxel is only inside the velocity-inflated zone
     /// of a bbox that was dynamic at the time of indexing.
