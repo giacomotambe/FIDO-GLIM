@@ -60,11 +60,11 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     points_limit                   = config.param<double>(k, "points_limit",                   0.05);
     min_voxel_points               = config.param<int>   (k, "min_voxel_points",               -1);
     cluster_propagation_threshold  = config.param<double>(k, "cluster_propagation_threshold",  0.3);
-    motion_threshold_scale         = config.param<double>(k, "motion_threshold_scale",         0.8);
-    rotation_threshold_scale       = config.param<double>(k, "rotation_threshold_scale",       2.2);
+    motion_threshold_scale         = config.param<double>(k, "motion_threshold_scale",         0.0);
+    rotation_threshold_scale       = config.param<double>(k, "rotation_threshold_scale",       0.0);
     min_shift_m                    = config.param<double>(k, "min_shift_m",                    0.03);
-    cluster_motion_scale           = config.param<double>(k, "cluster_motion_scale",           2.0);
-    cluster_rotation_scale         = config.param<double>(k, "cluster_rotation_scale",         3.0);
+    cluster_motion_scale           = config.param<double>(k, "cluster_motion_scale",           0.0);
+    cluster_rotation_scale         = config.param<double>(k, "cluster_rotation_scale",         0.0);
     w_distance                     = config.param<double>(k, "w_distance",                     0.0);
     w_velocity                     = config.param<double>(k, "w_velocity",                     0.0);
     velocity_static_threshold      = config.param<double>(k, "velocity_static_threshold",      0.0);
@@ -77,6 +77,19 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     noise_deadzone_k               = config.param<double>(k, "noise_deadzone_k",               3.0);
     keep_voxel_evidence            = config.param<bool>  (k, "keep_voxel_evidence",            false);
     unlock_ratio_factor            = config.param<double>(k, "unlock_ratio_factor",            2.0);
+    ground_band_m                  = config.param<double>(k, "ground_band_m",                  0.25);
+    ground_cell_m                  = config.param<double>(k, "ground_cell_m",                  2.0);
+    min_obj_height                 = config.param<double>(k, "min_obj_height",                 0.5);
+    min_obj_speed                  = config.param<double>(k, "min_obj_speed",                  0.3);
+    frame_max_dynamic_frac         = config.param<double>(k, "frame_max_dynamic_frac",         0.10);
+    inflated_requires_evidence     = config.param<bool>  (k, "inflated_requires_evidence",     true);
+    apply_lidar_imu_extrinsic      = config.param<bool>  (k, "apply_lidar_imu_extrinsic",      true);
+    if (apply_lidar_imu_extrinsic) {
+        Config sensors(GlobalConfig::get_config_path("config_sensors"));
+        T_imu_lidar = sensors.param<Eigen::Isometry3d>("sensors", "T_lidar_imu", Eigen::Isometry3d::Identity()).inverse();
+    }
+    pose_err_trans_k               = config.param<double>(k, "pose_err_trans_k",               0.01);
+    pose_err_rot_k                 = config.param<double>(k, "pose_err_rot_k",                 0.01);
     visibility_enabled             = config.param<bool>  (k, "visibility_enabled",             true);
     w_visibility                   = config.param<double>(k, "w_visibility",                   0.5);
     visibility_res_deg             = config.param<double>(k, "visibility_res_deg",             0.7);
@@ -154,8 +167,8 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
         spdlog::debug("[dynamic_rejection] first frame — storing reference voxelmap");
         voxelmap_history_.push_back(wf_result.voxelmap);
         pose_history_.push_back(Eigen::Isometry3d::Identity());  // no predecessor: identity delta
-        abs_pose_history_.push_back(pose_kalman_filter_->getPose());
-        last_pose_ = pose_kalman_filter_->getPose();
+        abs_pose_history_.push_back(lidar_pose());
+        last_pose_ = lidar_pose();
         last_dynamic_frame_ = nullptr;
         result.static_frame  = source_frame;
         result.dynamic_frame = nullptr;
@@ -166,8 +179,8 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     // current sensor frame, so the transform that maps them into the previous sensor
     // frame is T_prev^-1 * T_cur (NOT T_cur * T_prev^-1, which is a world-frame delta
     // and only coincides with the correct one for small rotations / poses near the origin).
-    // NOTE: the pose is the IMU pose; the IMU-LiDAR extrinsic is assumed ~identity here.
-    Eigen::Isometry3d cur_pose     = pose_kalman_filter_->getPose();
+    // The Kalman pose is T_world_imu; it is converted to T_world_lidar with the extrinsic.
+    Eigen::Isometry3d cur_pose     = lidar_pose();
     Eigen::Isometry3d T_delta_pose = last_pose_.inverse() * cur_pose;
     last_pose_ = cur_pose;
 
@@ -186,6 +199,7 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     // -----------------------------------------------------------------------
     auto t0 = std::chrono::steady_clock::now();
     index_voxel_bboxes(*wf_result.voxelmap, cluster_bboxes);
+    compute_ground_heights(*wf_result.voxelmap);
     if (params_.visibility_enabled) compute_visibility(*wf_result.voxelmap, cur_pose);
     else vis_frac_.clear();
     score_voxels(*wf_result.voxelmap, *voxelmap_history_.back(), cluster_bboxes, T_delta_pose);
@@ -374,6 +388,10 @@ void DynamicObjectRejectionCPU::score_voxels(
     // displacement grows linearly, so comparing against t-K raises the SNR ~K times.
     const int K = std::max(1, std::min(params_.compare_baseline_frames, hist_size));
     const auto& base_map = *voxelmap_history_[hist_size - K];
+    // Ego-motion between the baseline scan and now (for the pose-uncertainty term).
+    const Eigen::Isometry3d T_base_now = abs_pose_history_[hist_size - K].inverse() * last_pose_;
+    const double base_trans = T_base_now.translation().norm();
+    const double base_rot   = Eigen::AngleAxisd(T_base_now.linear()).angle();
 
     std::mutex dyn_mutex;
 
@@ -392,6 +410,7 @@ void DynamicObjectRejectionCPU::score_voxels(
 
         if (cur.is_wall || cur.is_ground || cur.is_outlier) return;
         if (cur.num_points < points_thr) return;
+        if (!hag_.empty() && hag_[j] < params_.ground_band_m) return;      // near-ground band
 
         // ---- Cluster bbox check (base AABB + velocity-inflated ellipsoid) ----
         // Dynamic-wins policy: if a voxel overlaps both a static and a dynamic
@@ -458,7 +477,10 @@ void DynamicObjectRejectionCPU::score_voxels(
         // linear w_distance penalty, which made walking people undetectable beyond ~3 m.
         const Eigen::Vector3d delta = p_base - base.mean.head<3>();
         const double range = cur.mean.head<3>().norm();
-        const double sigma = std::min(params_.noise_sigma_max, params_.noise_sigma0 + params_.noise_sigma_slope * range);
+        // Measurement noise (range dependent) + pose uncertainty accumulated over the baseline:
+        // thresholds follow the expected error, not the vehicle speed (legacy motion_scale).
+        const double sigma = std::min(params_.noise_sigma_max, params_.noise_sigma0 + params_.noise_sigma_slope * range)
+                           + params_.pose_err_trans_k * base_trans + params_.pose_err_rot_k * base_rot * range;
         const double dead  = std::max(params_.min_shift_m, params_.noise_deadzone_k * sigma);
         const double shift = std::max(0.0, delta.norm() - dead) * inv_res;
 
@@ -530,6 +552,38 @@ void DynamicObjectRejectionCPU::score_voxels(
     };
 
     parallel_for_voxels(nvox, params_.num_threads, per_voxel);
+}
+
+
+// ===========================================================================
+// compute_ground_heights()
+// ===========================================================================
+// Local ground = lowest voxel centroid in a ground_cell_m XY cell and its 8 neighbours.
+
+void DynamicObjectRejectionCPU::compute_ground_heights(const gtsam_points::DynamicVoxelMapCPU& voxelmap)
+{
+    const int nvox = nvox_of(voxelmap);
+    hag_.assign(nvox, std::numeric_limits<float>::infinity());
+    if (params_.ground_band_m <= 0.0) { hag_.clear(); return; }
+    const double inv = 1.0 / params_.ground_cell_m;
+    const auto key = [](int x, int y) { return (static_cast<int64_t>(x) << 32) ^ static_cast<uint32_t>(y); };
+    std::unordered_map<int64_t, float> zmin;
+    std::vector<std::pair<int,int>> cell(nvox);
+    for (int j = 0; j < nvox; ++j) {
+        const auto& m = voxelmap.lookup_voxel(j).mean;
+        cell[j] = {static_cast<int>(std::floor(m.x() * inv)), static_cast<int>(std::floor(m.y() * inv))};
+        auto it = zmin.find(key(cell[j].first, cell[j].second));
+        if (it == zmin.end()) zmin.emplace(key(cell[j].first, cell[j].second), static_cast<float>(m.z()));
+        else it->second = std::min(it->second, static_cast<float>(m.z()));
+    }
+    for (int j = 0; j < nvox; ++j) {
+        float g = std::numeric_limits<float>::infinity();
+        for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) {
+            auto it = zmin.find(key(cell[j].first + dx, cell[j].second + dy));
+            if (it != zmin.end()) g = std::min(g, it->second);
+        }
+        hag_[j] = static_cast<float>(voxelmap.lookup_voxel(j).mean.z()) - g;
+    }
 }
 
 
@@ -754,7 +808,10 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             continue;
         }
 
-        const bool is_dyn = ratio > eff_prop_threshold;
+        // Object-level plausibility: tall enough and coherently moving in the world frame.
+        const bool tall   = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
+        const bool moving = params_.min_obj_speed <= 0.0 || cluster_bboxes[c].get_speed_xy() >= params_.min_obj_speed;
+        const bool is_dyn = ratio > eff_prop_threshold && tall && moving;
         cluster_bboxes[c].set_dynamic(is_dyn);  // feedback for update_dynamic_feedback()
         spdlog::debug("[dynamic_rejection] cluster {}: {}/{} dynamic ({:.1f}%) threshold={:.2f} -> {} (was {})",
                       c, dynamic_count[c], total_count[c], ratio * 100.0, eff_prop_threshold,
@@ -762,39 +819,54 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     }
 
     // Final voxel assignment.
-    parallel_for_voxels(nvox, params_.num_threads, [&](int j) {
-        auto& v = voxelmap.lookup_voxel(j);
-        // Structural voxels are never removed (ground under a person must stay in the map).
-        if (v.is_wall || v.is_ground || v.is_outlier) { v.is_dynamic = false; return; }
+    const auto assign = [&](bool strict) {
+        parallel_for_voxels(nvox, params_.num_threads, [&](int j) {
+            auto& v = voxelmap.lookup_voxel(j);
+            const bool own = v.is_dynamic || (!vis_frac_.empty() && vis_frac_[j] > 0.f);  // per-voxel evidence (pre-assignment)
+            // Structural voxels are never removed (ground under a person must stay in the map).
+            if (v.is_wall || v.is_ground || v.is_outlier) { v.is_dynamic = false; return; }
+            const bool near_ground = !hag_.empty() && hag_[j] < params_.ground_band_m;
 
-        bool in_any_base = false, in_dynamic = false;
-        for (const auto& [c, in_base] : voxel_bboxes_[j]) {
-            if (!was_dynamic[c]) {
-                if (in_base) in_any_base = true;
-                continue;
+            bool in_any_base = false, in_dyn_base = false, in_dyn_inflated = false;
+            for (const auto& [c, in_base] : voxel_bboxes_[j]) {
+                if (!was_dynamic[c]) { if (in_base) in_any_base = true; continue; }
+                if (near_ground && cluster_bboxes[c].get_size().z() < params_.min_obj_height) continue;
+                if (in_base) in_dyn_base = true; else in_dyn_inflated = true;
             }
-            // Confirmed-dynamic bbox: base volume or velocity-inflated zone.
-            in_dynamic = true;
-            break;
-        }
+            if (in_dyn_base) { v.is_dynamic = true; return; }
+            if (strict || near_ground) { v.is_dynamic = false; return; }   // anomalous frame / ground band: confirmed objects only
+            const bool need = params_.inflated_requires_evidence;
+            if (in_dyn_inflated) { v.is_dynamic = !need || own; return; }
+            if (in_any_base) { v.is_dynamic = false; return; }             // inside a static cluster only
 
-        if (in_dynamic) { v.is_dynamic = true; return; }
-        if (in_any_base) { v.is_dynamic = false; return; }   // inside a static cluster only
-
-        // Outside all bboxes: historical bboxes of confirmed-dynamic tracks.
-        for (const auto& hbbox : historical_bboxes) {
-            if (hbbox.contains(v.mean) || hbbox.contains_inflated(v.mean, inflate_params_)) {
-                v.is_dynamic = true;
-                return;
+            // Outside all bboxes: historical bboxes of confirmed-dynamic tracks.
+            for (const auto& hbbox : historical_bboxes) {
+                if (hbbox.contains(v.mean) || hbbox.contains_inflated(v.mean, inflate_params_)) {
+                    v.is_dynamic = !need || own;
+                    return;
+                }
             }
-        }
+            const bool vis_keep = !vis_frac_.empty() && vis_frac_[j] >= params_.visibility_keep_frac &&
+                                  static_cast<int>(v.voxel_points.size()) >= params_.visibility_keep_min_points;
+            v.is_dynamic = (params_.keep_voxel_evidence && v.is_dynamic) || vis_keep;
+        });
+    };
+    std::vector<char> pre(nvox);
+    for (int j = 0; j < nvox; ++j) pre[j] = voxelmap.lookup_voxel(j).is_dynamic;
+    assign(false);
 
-        // Per-voxel evidence (Tier 2/3 + neighbour propagation). Previously this was
-        // always discarded; keep it when enabled.
-        const bool vis_keep = !vis_frac_.empty() && vis_frac_[j] >= params_.visibility_keep_frac &&
-                              static_cast<int>(v.voxel_points.size()) >= params_.visibility_keep_min_points;
-        v.is_dynamic = (params_.keep_voxel_evidence && v.is_dynamic) || vis_keep;
-    });
+    // Anomalous frame guard: an implausibly large dynamic fraction usually means a pose /
+    // deskew problem, not a crowd. Fall back to confirmed-dynamic objects only.
+    size_t dyn_pts = 0, all_pts = 0;
+    for (int j = 0; j < nvox; ++j) {
+        const auto& v = voxelmap.lookup_voxel(j);
+        all_pts += v.voxel_points.size(); if (v.is_dynamic) dyn_pts += v.voxel_points.size();
+    }
+    if (all_pts > 0 && static_cast<double>(dyn_pts) / all_pts > params_.frame_max_dynamic_frac) {
+        spdlog::debug("[dynamic_rejection] anomalous frame: {:.1f}% dynamic -> confirmed objects only", 100.0 * dyn_pts / all_pts);
+        for (int j = 0; j < nvox; ++j) voxelmap.lookup_voxel(j).is_dynamic = pre[j];
+        assign(true);
+    }
 }
 
 

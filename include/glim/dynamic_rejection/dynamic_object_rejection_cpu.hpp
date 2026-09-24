@@ -53,6 +53,18 @@ public:
     double velocity_static_threshold;   ///< Speed [m/s] below which the cluster is treated as static (score contribution becomes negative).
     double static_cluster_penalty_factor; ///< Score -= w_cluster * factor for voxels outside every dynamic bbox. (was hard-coded 0.5)
     double unmatched_dynamic_margin;      ///< Score assigned to unmatched voxels in a dynamic bbox = threshold + margin. (was hard-coded 1.0)
+    // Precision filters
+    double ground_band_m;                 ///< Voxels lower than this above the local ground are never dynamic unless inside a confirmed-dynamic bbox tall >= min_obj_height.
+    double ground_cell_m;                 ///< XY cell size for the local ground height estimate.
+    double min_obj_height;                ///< A cluster can turn dynamic only if its bbox is at least this tall [m].
+    double min_obj_speed;                 ///< ... and its estimated world-frame speed is at least this [m/s] (0 = off).
+    double frame_max_dynamic_frac;        ///< If more than this fraction of a frame is dynamic, keep only confirmed-dynamic bboxes (anomalous frame). >= 1 = off.
+    bool   inflated_requires_evidence;    ///< Voxels in velocity-inflated / historical zones need their own evidence (score or visibility).
+    // Pose handling
+    bool   apply_lidar_imu_extrinsic;     ///< getPose() is T_world_imu: convert with T_imu_lidar from config_sensors (true in GLIM).
+    Eigen::Isometry3d T_imu_lidar = Eigen::Isometry3d::Identity();
+    double pose_err_trans_k;              ///< Expected centroid error per metre of ego translation over the baseline (added to sigma).
+    double pose_err_rot_k;                ///< Expected angular pose error per radian of ego rotation over the baseline (x range, added to sigma).
     // Baseline comparison and noise-aware dead zone
     int    compare_baseline_frames;       ///< Compare each voxel against frame t-K (K = this value, 1 = previous frame).
     double noise_sigma0;                  ///< Expected centroid noise [m] at range 0.
@@ -254,6 +266,8 @@ private:
     std::deque<Eigen::Isometry3d> pose_history_;
     std::deque<Eigen::Isometry3d> abs_pose_history_;   ///< T_world_sensor of each voxelmap_history_ entry.
     std::vector<float> vis_frac_;
+    std::vector<float> hag_;              ///< Per-voxel height above local ground [m].
+    void compute_ground_heights(const gtsam_points::DynamicVoxelMapCPU& voxelmap);
     std::deque<std::vector<float>> range_img_history_;  ///< Range image of each voxelmap_history_ entry (own frame, 3x3 min).
     /// Per-voxel list of (bbox index, in_base) built once per frame.
     /// in_base == false means the voxel is only inside the velocity-inflated zone
@@ -272,6 +286,7 @@ private:
     std::shared_ptr<PoseKalmanFilter> pose_kalman_filter_;
     std::unique_ptr<CloudCovarianceEstimation> covariance_estimation_;
     Eigen::Isometry3d last_pose_;
+    Eigen::Isometry3d lidar_pose() const { return pose_kalman_filter_->getPose() * params_.T_imu_lidar; }
 
     std::vector<BoundingBox> last_cluster_bboxes_;
 

@@ -80,6 +80,7 @@ public:
     double assoc_gate_base;           ///< Association gate [m] at range 0 for a track seen in the previous frame. Default: 0.8
     double assoc_gate_per_range;      ///< Gate increase per metre of range. Default: 0.03
     double assoc_gate_per_missed;     ///< Gate increase per missed frame. Default: 0.3
+    Eigen::Isometry3d T_imu_lidar = Eigen::Isometry3d::Identity();  ///< from config_sensors when apply_lidar_imu_extrinsic
     int    release_static_frames;     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
     int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
 };

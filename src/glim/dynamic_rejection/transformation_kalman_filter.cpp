@@ -187,10 +187,13 @@ Eigen::Isometry3d PoseKalmanFilter::update(const Eigen::Isometry3d& T_world_imu)
   spdlog::debug("[KF] update: filtered abs t=({:.4f},{:.4f},{:.4f})", T_filtered.translation().x(), T_filtered.translation().y(), T_filtered.translation().z());
 
   // --- Reset for next interval ---
+  // velocity_ is expressed in the frame at reset: carry it over to the new reset frame
+  // instead of zeroing it, otherwise the IMU prediction restarts from rest every update.
+  const Eigen::Vector3d v_world = orientation_at_reset_ * velocity_;
   last_slam_pose_ = T_world_imu;
   orientation_at_reset_ = Eigen::Quaterniond(T_world_imu.rotation()).normalized();
   delta_position_.setZero();
-  velocity_.setZero();
+  velocity_ = orientation_at_reset_.conjugate() * v_world;
   delta_orientation_ = Eigen::Quaterniond::Identity();
 
   const Eigen::Matrix<double, 9, 9> I9 = Eigen::Matrix<double, 9, 9>::Identity();

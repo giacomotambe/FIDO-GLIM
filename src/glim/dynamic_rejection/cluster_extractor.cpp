@@ -74,6 +74,10 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     assoc_gate_base               = config.param<double>("dynamic_cluster_extractor", "assoc_gate_base",               0.8);
     assoc_gate_per_range          = config.param<double>("dynamic_cluster_extractor", "assoc_gate_per_range",          0.03);
     assoc_gate_per_missed         = config.param<double>("dynamic_cluster_extractor", "assoc_gate_per_missed",         0.3);
+    if (config.param<bool>("dynamic_cluster_extractor", "apply_lidar_imu_extrinsic", true)) {
+        Config sensors(GlobalConfig::get_config_path("config_sensors"));
+        T_imu_lidar = sensors.param<Eigen::Isometry3d>("sensors", "T_lidar_imu", Eigen::Isometry3d::Identity()).inverse();
+    }
     release_static_frames         = config.param<int>   ("dynamic_cluster_extractor", "release_static_frames",         0);
 
     spdlog::debug("[cluster_extractor] eps_factor={:.2f} min_pts={} knn_max={} "
@@ -171,7 +175,7 @@ std::vector<BoundingBox> DynamicClusterExtractor::extract_clusters(
 
         // getPose() = T_world_sensor. Maps previous-sensor-frame quantities into the
         // current sensor frame: T_cur^-1 * T_prev (was (T_cur * T_prev^-1)^-1, a world-frame delta).
-        const Eigen::Isometry3d cur_pose     = pose_kalman_filter_->getPose();
+        const Eigen::Isometry3d cur_pose     = pose_kalman_filter_->getPose() * params_.T_imu_lidar;   // T_world_lidar
         const Eigen::Isometry3d T_to_current = cur_pose.inverse() * last_pose_;
         last_pose_ = cur_pose;
 

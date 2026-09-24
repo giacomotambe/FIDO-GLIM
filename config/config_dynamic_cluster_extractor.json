@@ -36,6 +36,7 @@
     "assoc_gate_base": 0.8,
     "assoc_gate_per_range": 0.03,
     "assoc_gate_per_missed": 0.3,
-    "release_static_frames": 0
+    "release_static_frames": 0,
+    "apply_lidar_imu_extrinsic": true
   }
 }

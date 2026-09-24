@@ -16,11 +16,11 @@
     "points_limit": 0.05,
     "dynamic_cluster_ratio": 0.3,
     "cluster_propagation_threshold": 0.3,
-    "motion_threshold_scale": 0.8,
-    "rotation_threshold_scale": 2.2,
+    "motion_threshold_scale": 0.0,
+    "rotation_threshold_scale": 0.0,
     "min_shift_m": 0.03,
-    "cluster_motion_scale": 2.0,
-    "cluster_rotation_scale": 3.0,
+    "cluster_motion_scale": 0.0,
+    "cluster_rotation_scale": 0.0,
     "w_distance": 0.0,
     "w_velocity": 0.0,
     "velocity_static_threshold": 0.0,
@@ -50,6 +50,15 @@
     "visibility_max_age": 5,
     "visibility_max_incidence_deg": 75.0,
     "visibility_keep_frac": 2.0,
-    "visibility_keep_min_points": 2
+    "visibility_keep_min_points": 2,
+    "apply_lidar_imu_extrinsic": true,
+    "pose_err_trans_k": 0.01,
+    "pose_err_rot_k": 0.01,
+    "ground_band_m": 0.25,
+    "ground_cell_m": 2.0,
+    "min_obj_height": 0.5,
+    "min_obj_speed": 0.3,
+    "frame_max_dynamic_frac": 0.1,
+    "inflated_requires_evidence": true
   }
 }
