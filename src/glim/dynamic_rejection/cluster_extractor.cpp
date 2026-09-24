@@ -737,6 +737,18 @@ void DynamicClusterExtractor::update_tracks(
         }
         bboxes[p.b_idx].set_velocity(t.velocity);
 
+        // Window speed: displacement of the centroid w.r.t. the oldest stored bbox (all in the
+        // current frame, i.e. ego-motion compensated) divided by the elapsed frames.
+        if (dt > 0.0 && !t.bbox_history.empty()) {
+            const auto& old = t.bbox_history.front();
+            const double frames = static_cast<double>(t.bbox_history.size() + 1);
+            const Eigen::Vector3d disp = bboxes[p.b_idx].get_centroid() - old.get_centroid();
+            bboxes[p.b_idx].set_window_speed(disp.head<2>().norm() / (frames * dt));
+        } else if (dt > 0.0) {
+            const Eigen::Vector3d disp = bboxes[p.b_idx].get_centroid() - t.center;
+            bboxes[p.b_idx].set_window_speed(disp.head<2>().norm() / dt);
+        }
+
         // Push previous bbox (already in current frame) to history before overwriting.
         if (params_.track_bbox_history_size > 0) {
             t.bbox_history.push_back(t.last_bbox);

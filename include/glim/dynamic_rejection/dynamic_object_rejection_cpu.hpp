@@ -59,7 +59,12 @@ public:
     double min_obj_height;                ///< A cluster can turn dynamic only if its bbox is at least this tall [m].
     double min_obj_speed;                 ///< ... and its estimated world-frame speed is at least this [m/s] (0 = off).
     double frame_max_dynamic_frac;        ///< If more than this fraction of a frame is dynamic, keep only confirmed-dynamic bboxes (anomalous frame). >= 1 = off.
-    bool   inflated_requires_evidence;    ///< Voxels in velocity-inflated / historical zones need their own evidence (score or visibility).
+    bool   inflated_requires_evidence;
+    // Recall recovery
+    double fast_confirm_ratio_factor;     ///< Remove a cluster in the same frame (no hysteresis) if ratio > factor * threshold ...
+    double fast_confirm_min_vis;          ///< ... and its mean free-space fraction >= this. (factor <= 0 = off)
+    double moving_vis_alt;                ///< A cluster passes the speed gate also if its mean free-space fraction >= this (> 1 = off).
+    double foot_min_hag;                  ///< Near-ground / ground voxels inside the XY footprint of a confirmed tall dynamic bbox and higher than this above ground are dynamic (< 0 = off).    ///< Voxels in velocity-inflated / historical zones need their own evidence (score or visibility).
     // Pose handling
     bool   apply_lidar_imu_extrinsic;     ///< getPose() is T_world_imu: convert with T_imu_lidar from config_sensors (true in GLIM).
     Eigen::Isometry3d T_imu_lidar = Eigen::Isometry3d::Identity();

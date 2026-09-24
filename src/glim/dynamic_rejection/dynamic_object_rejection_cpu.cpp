@@ -83,6 +83,10 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     min_obj_speed                  = config.param<double>(k, "min_obj_speed",                  0.3);
     frame_max_dynamic_frac         = config.param<double>(k, "frame_max_dynamic_frac",         0.10);
     inflated_requires_evidence     = config.param<bool>  (k, "inflated_requires_evidence",     true);
+    fast_confirm_ratio_factor      = config.param<double>(k, "fast_confirm_ratio_factor",      2.0);
+    fast_confirm_min_vis           = config.param<double>(k, "fast_confirm_min_vis",           0.2);
+    moving_vis_alt                 = config.param<double>(k, "moving_vis_alt",                 0.3);
+    foot_min_hag                   = config.param<double>(k, "foot_min_hag",                   -1.0);
     apply_lidar_imu_extrinsic      = config.param<bool>  (k, "apply_lidar_imu_extrinsic",      true);
     if (apply_lidar_imu_extrinsic) {
         Config sensors(GlobalConfig::get_config_path("config_sensors"));
@@ -769,6 +773,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
 
     std::vector<int> dynamic_count(n_clusters, 0);
     std::vector<int> total_count  (n_clusters, 0);
+    std::vector<double> vis_sum   (n_clusters, 0.0);
 
     // Dynamic-wins multi-cluster assignment: a voxel contributes to ALL base bboxes containing it.
     for (int j = 0; j < nvox; ++j) {
@@ -777,6 +782,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             if (!in_base) continue;
             ++total_count[c];
             if (dyn) ++dynamic_count[c];
+            if (!vis_frac_.empty()) vis_sum[c] += vis_frac_[j];
         }
     }
 
@@ -809,9 +815,16 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         }
 
         // Object-level plausibility: tall enough and coherently moving in the world frame.
+        const double vis_mean = vis_sum[c] / total_count[c];
+        const double speed    = std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed());
         const bool tall   = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
-        const bool moving = params_.min_obj_speed <= 0.0 || cluster_bboxes[c].get_speed_xy() >= params_.min_obj_speed;
+        const bool moving = params_.min_obj_speed <= 0.0 || speed >= params_.min_obj_speed || vis_mean >= params_.moving_vis_alt;
         const bool is_dyn = ratio > eff_prop_threshold && tall && moving;
+        // Fast confirmation: very strong evidence in this frame -> remove now, without waiting
+        // for the hysteresis (the tracker still counts it as one confirmed frame).
+        if (is_dyn && params_.fast_confirm_ratio_factor > 0.0 &&
+            ratio > params_.fast_confirm_ratio_factor * eff_prop_threshold && vis_mean >= params_.fast_confirm_min_vis)
+            was_dynamic[c] = true;
         cluster_bboxes[c].set_dynamic(is_dyn);  // feedback for update_dynamic_feedback()
         spdlog::debug("[dynamic_rejection] cluster {}: {}/{} dynamic ({:.1f}%) threshold={:.2f} -> {} (was {})",
                       c, dynamic_count[c], total_count[c], ratio * 100.0, eff_prop_threshold,
@@ -823,9 +836,23 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         parallel_for_voxels(nvox, params_.num_threads, [&](int j) {
             auto& v = voxelmap.lookup_voxel(j);
             const bool own = v.is_dynamic || (!vis_frac_.empty() && vis_frac_[j] > 0.f);  // per-voxel evidence (pre-assignment)
+            const bool near_ground = !hag_.empty() && hag_[j] < params_.ground_band_m;
+            // Feet / wheels: low voxels inside the XY footprint of a confirmed tall dynamic bbox,
+            // slightly above the local ground (the ground itself stays static).
+            if ((v.is_ground || near_ground) && !v.is_wall && params_.foot_min_hag >= 0.0 && !hag_.empty() &&
+                hag_[j] >= params_.foot_min_hag) {
+                for (int c = 0; c < n_clusters; ++c) {
+                    if (!was_dynamic[c]) continue;
+                    const auto& b = cluster_bboxes[c];
+                    if (b.get_size().z() < params_.min_obj_height) continue;
+                    const Eigen::Vector3d d = v.mean.head<3>() - b.get_center();
+                    const Eigen::Vector3d hs = 0.5 * b.get_size();
+                    if (std::abs(d.x()) <= hs.x() && std::abs(d.y()) <= hs.y() &&
+                        d.z() <= hs.z() && d.z() >= -hs.z() - params_.ground_band_m) { v.is_dynamic = true; return; }
+                }
+            }
             // Structural voxels are never removed (ground under a person must stay in the map).
             if (v.is_wall || v.is_ground || v.is_outlier) { v.is_dynamic = false; return; }
-            const bool near_ground = !hag_.empty() && hag_[j] < params_.ground_band_m;
 
             bool in_any_base = false, in_dyn_base = false, in_dyn_inflated = false;
             for (const auto& [c, in_base] : voxel_bboxes_[j]) {

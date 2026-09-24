@@ -70,6 +70,10 @@ public:
     void set_velocity(const Eigen::Vector3d& v) { velocity_ = v; speed_xy_ = std::hypot(v.x(), v.y()); }
     const Eigen::Vector3d& get_velocity() const { return velocity_; }
     double get_speed_xy()               const { return speed_xy_; }
+    /// XY speed estimated from the displacement of the track centroid over a window of frames
+    /// (robust to the EMA start-up lag of the velocity). 0 if unknown.
+    double get_window_speed()           const { return window_speed_; }
+    void   set_window_speed(double v)         { window_speed_ = v; }
 
     /// Returns true if `point` falls inside the inflated 2D ellipse footprint
     /// and inside the already-inflated bbox height. The footprint is shifted
@@ -86,6 +90,7 @@ private:
     bool strong_motion_ = false;  ///< Per-frame strong motion evidence (see has_strong_motion()).
     Eigen::Vector3d centroid_ = Eigen::Vector3d::Zero();
     bool has_centroid_ = false;
+    double window_speed_ = 0.0;
     int  track_id;  ///< -1 = untracked / phantom
     // Precomputed for contains()
     Eigen::Matrix3d R_inv;
