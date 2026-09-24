@@ -47,14 +47,17 @@ public:
     double min_shift_m;                 ///< Dead zone: centroid shifts below this value [m] contribute 0 to the score. Absorbs voxel-grid quantization artifacts.
     double cluster_motion_scale;          ///< Scales cluster_propagation_threshold by (1+translation_scale)^cluster_motion_scale.
     double cluster_rotation_scale;        ///< Scales cluster_propagation_threshold by (1+rotation_scale)^cluster_rotation_scale.
-    double w_distance;                  ///< Negative weight on voxel distance from origin. Score -= w_distance * dist. Suppresses far-range false positives.
+    double w_distance;                  ///< DEPRECATED (default 0, superseded by noise_deadzone_k). Negative weight on voxel distance from origin. Score -= w_distance * dist. Suppresses far-range false positives.
     double w_velocity;                  ///< Weight on cluster EMA speed. Score += w_velocity * (speed - threshold). Positive above threshold, negative below.
     double velocity_static_threshold;   ///< Speed [m/s] below which the cluster is treated as static (score contribution becomes negative).
     double static_cluster_penalty_factor; ///< Score -= w_cluster * factor for voxels outside every dynamic bbox. (was hard-coded 0.5)
     double unmatched_dynamic_margin;      ///< Score assigned to unmatched voxels in a dynamic bbox = threshold + margin. (was hard-coded 1.0)
-    // Long-baseline comparison (slow objects)
-    int    long_baseline_frames;          ///< Also compare the voxel against frame t-k (k = this value). 0/1 = disabled.
-    double w_shift_long;                  ///< Weight of the long-baseline centroid shift. Score uses max(w_shift*shift, w_shift_long*shift_long).
+    // Baseline comparison and noise-aware dead zone
+    int    compare_baseline_frames;       ///< Compare each voxel against frame t-K (K = this value, 1 = previous frame).
+    double noise_sigma0;                  ///< Expected centroid noise [m] at range 0.
+    double noise_sigma_slope;             ///< Increase of expected centroid noise per metre of range.
+    double noise_sigma_max;               ///< Cap of the expected centroid noise [m].
+    double noise_deadzone_k;              ///< Dead zone = max(min_shift_m, k * sigma(range)).
     // Final voxel assignment
     bool   keep_voxel_evidence;           ///< Keep voxels classified dynamic by per-voxel scoring even when outside every bbox.
     // Permanent-static unlock

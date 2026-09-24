@@ -3,7 +3,7 @@
     "dynamic_score_threshold": 0.08,
     "tier1_threshold_factor": 0.55,
     "unconstrained_threshold_factor": 3.0,
-    "memory_threshold_factor": 0.70,
+    "memory_threshold_factor": 0.7,
     "num_threads": 4,
     "w_shift": 1.2,
     "w_mahalanobis": 0.0,
@@ -21,17 +21,19 @@
     "min_shift_m": 0.03,
     "cluster_motion_scale": 2.0,
     "cluster_rotation_scale": 3.0,
-    "w_distance": 0.16,
+    "w_distance": 0.0,
     "w_velocity": 0.0,
     "velocity_static_threshold": 0.0,
-
     "_comment_new": "=== fix/dynamic-rejection: new parameters ===",
     "min_voxel_points": -1,
     "static_cluster_penalty_factor": 0.5,
     "unmatched_dynamic_margin": 1.0,
-    "long_baseline_frames": 3,
-    "w_shift_long": 0.0,
     "keep_voxel_evidence": false,
-    "unlock_ratio_factor": 2.0
+    "unlock_ratio_factor": 2.0,
+    "compare_baseline_frames": 5,
+    "noise_sigma0": 0.045,
+    "noise_sigma_slope": 0.007,
+    "noise_sigma_max": 0.1,
+    "noise_deadzone_k": 3.0
   }
 }

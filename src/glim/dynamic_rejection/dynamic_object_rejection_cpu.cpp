@@ -64,19 +64,22 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     min_shift_m                    = config.param<double>(k, "min_shift_m",                    0.03);
     cluster_motion_scale           = config.param<double>(k, "cluster_motion_scale",           2.0);
     cluster_rotation_scale         = config.param<double>(k, "cluster_rotation_scale",         3.0);
-    w_distance                     = config.param<double>(k, "w_distance",                     0.16);
+    w_distance                     = config.param<double>(k, "w_distance",                     0.0);
     w_velocity                     = config.param<double>(k, "w_velocity",                     0.0);
     velocity_static_threshold      = config.param<double>(k, "velocity_static_threshold",      0.0);
     static_cluster_penalty_factor  = config.param<double>(k, "static_cluster_penalty_factor",  0.5);
     unmatched_dynamic_margin       = config.param<double>(k, "unmatched_dynamic_margin",       1.0);
-    long_baseline_frames           = config.param<int>   (k, "long_baseline_frames",           3);
-    w_shift_long                   = config.param<double>(k, "w_shift_long",                   0.0);
+    compare_baseline_frames        = config.param<int>   (k, "compare_baseline_frames",        5);
+    noise_sigma0                   = config.param<double>(k, "noise_sigma0",                   0.045);
+    noise_sigma_slope              = config.param<double>(k, "noise_sigma_slope",              0.007);
+    noise_sigma_max                = config.param<double>(k, "noise_sigma_max",                0.10);
+    noise_deadzone_k               = config.param<double>(k, "noise_deadzone_k",               3.0);
     keep_voxel_evidence            = config.param<bool>  (k, "keep_voxel_evidence",            false);
     unlock_ratio_factor            = config.param<double>(k, "unlock_ratio_factor",            2.0);
 
     // Frame history must hold at least the long-baseline frame.
-    if (long_baseline_frames > 1 && frame_num_memory < long_baseline_frames)
-        frame_num_memory = long_baseline_frames;
+    if (frame_num_memory < compare_baseline_frames)
+        frame_num_memory = compare_baseline_frames;
 
     spdlog::debug("[dynamic_rejection] params loaded");
 }
@@ -339,10 +342,12 @@ void DynamicObjectRejectionCPU::score_voxels(
     const int hist_size  = static_cast<int>(voxelmap_history_.size());
     const int hist_depth = std::min(params_.frame_num_memory, hist_size) - 1;
 
-    // Long-baseline frame t-L lives at voxelmap_history_[hist_size - L]
-    // (voxelmap_history_.back() is t-1).
-    const int L = params_.long_baseline_frames;
-    const bool use_long = (L > 1) && (hist_size >= L) && (params_.w_shift_long > 0.0);
+    // Baseline frame t-K lives at voxelmap_history_[hist_size - K]
+    // (voxelmap_history_.back() is t-1). Centroid noise between two scans is ~constant
+    // w.r.t. the time gap (~6-9 cm on indoor data), while a moving object's
+    // displacement grows linearly, so comparing against t-K raises the SNR ~K times.
+    const int K = std::max(1, std::min(params_.compare_baseline_frames, hist_size));
+    const auto& base_map = *voxelmap_history_[hist_size - K];
 
     std::mutex dyn_mutex;
 
@@ -388,7 +393,16 @@ void DynamicObjectRejectionCPU::score_voxels(
         const Eigen::Vector4d p_trans4(p_trans.x(), p_trans.y(), p_trans.z(), 1.0);
         const int prev_idx = match_voxel(previous, p_trans, voxel_res);
 
-        if (prev_idx < 0) {
+        // ---- 0. Recent-dynamic memory (t-1, threshold reduction only, no score bonus) ----
+        const bool was_recently_dynamic = prev_idx >= 0 && previous.lookup_voxel(prev_idx).is_dynamic;
+
+        // ---- Move the centroid into the baseline frame t-K and match ----
+        Eigen::Vector3d p_base = p_trans;                               // frame t-1
+        for (int idx = hist_size - 1; idx > hist_size - K; --idx)
+            p_base = pose_history_[idx] * p_base;                       // frame idx -> idx-1
+        const int base_idx = (K == 1) ? prev_idx : match_voxel(base_map, p_base, voxel_res);
+
+        if (base_idx < 0) {
             // Tier-1 (confirmed dynamic bbox): the object likely moved out of the
             // search window -> dynamic. Otherwise inconclusive -> static.
             if (possibly_dynamic) {
@@ -399,35 +413,22 @@ void DynamicObjectRejectionCPU::score_voxels(
             return;
         }
 
-        const auto& prv = previous.lookup_voxel(prev_idx);
+        const auto& base = base_map.lookup_voxel(base_idx);
 
-        // ---- 0. Recent-dynamic memory (threshold reduction only, no score bonus) ----
-        const bool was_recently_dynamic = prv.is_dynamic;
-
-        // ---- 1. Centroid shift (normalised by voxel size, with dead zone) ----
-        const Eigen::Vector3d delta = p_trans - prv.mean.head<3>();
-        const double shift = std::max(0.0, delta.norm() - params_.min_shift_m) * inv_res;
-
-        // ---- 1b. Long-baseline shift vs frame t-L (slow objects) ----
-        // A slow object moves less than min_shift_m between consecutive frames
-        // but accumulates a measurable displacement over L frames.
-        double shift_long = 0.0;
-        if (use_long) {
-            Eigen::Vector3d p_long = p_trans;                       // frame t-1
-            for (int idx = hist_size - 1; idx > hist_size - L; --idx)
-                p_long = pose_history_[idx] * p_long;               // frame idx -> idx-1
-            const auto& map_long = *voxelmap_history_[hist_size - L];
-            const int li = match_voxel(map_long, p_long, voxel_res);
-            if (li >= 0) {
-                const double d = (p_long - map_long.lookup_voxel(li).mean.head<3>()).norm();
-                shift_long = std::max(0.0, d - params_.min_shift_m) * inv_res;
-            }
-        }
+        // ---- 1. Centroid shift with range-dependent dead zone ----
+        // Dead zone = noise_deadzone_k * sigma(r), sigma(r) = expected centroid noise
+        // at range r (measured: ~5 cm at 1.5 m, ~9 cm beyond 6 m). Replaces the
+        // linear w_distance penalty, which made walking people undetectable beyond ~3 m.
+        const Eigen::Vector3d delta = p_base - base.mean.head<3>();
+        const double range = cur.mean.head<3>().norm();
+        const double sigma = std::min(params_.noise_sigma_max, params_.noise_sigma0 + params_.noise_sigma_slope * range);
+        const double dead  = std::max(params_.min_shift_m, params_.noise_deadzone_k * sigma);
+        const double shift = std::max(0.0, delta.norm() - dead) * inv_res;
 
         // ---- 2. Mahalanobis distance ----
         double mahal = 0.0;
         if (params_.w_mahalanobis > 0.0) {
-            Eigen::Matrix3d cov = prv.cov.topLeftCorner<3, 3>();
+            Eigen::Matrix3d cov = base.cov.topLeftCorner<3, 3>();
             cov = 0.5 * (cov + cov.transpose());
             cov.diagonal().array() += 1e-6;
 
@@ -441,8 +442,7 @@ void DynamicObjectRejectionCPU::score_voxels(
             }
         }
 
-        cur.dynamic_score += std::max(params_.w_shift * shift, params_.w_shift_long * shift_long)
-                           + params_.w_mahalanobis * mahal;
+        cur.dynamic_score += params_.w_shift * shift + params_.w_mahalanobis * mahal;
 
         // ---- History suppression ----
         // Count only frames where the voxel was present AND static.
