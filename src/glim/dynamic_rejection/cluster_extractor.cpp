@@ -65,7 +65,7 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     permanent_static_frames   = config.param<int>("dynamic_cluster_extractor", "permanent_static_frames",   10);
     track_bbox_history_size   = config.param<int>("dynamic_cluster_extractor", "track_bbox_history_size",   5);
     use_motion_prediction         = config.param<bool>  ("dynamic_cluster_extractor", "use_motion_prediction",         true);
-    fast_track_speed              = config.param<double>("dynamic_cluster_extractor", "fast_track_speed",              0.8);
+    fast_track_speed              = config.param<double>("dynamic_cluster_extractor", "fast_track_speed",              0.0);
     fast_track_min_dynamic_frames = config.param<int>   ("dynamic_cluster_extractor", "fast_track_min_dynamic_frames", 1);
     permanent_unlock_frames       = config.param<int>   ("dynamic_cluster_extractor", "permanent_unlock_frames",       2);
 

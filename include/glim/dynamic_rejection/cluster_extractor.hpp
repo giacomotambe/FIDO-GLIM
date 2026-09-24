@@ -74,7 +74,7 @@ public:
     int    permanent_static_frames;   ///< Consecutive static frames to lock track as permanently static.  0 = disabled. Default: 10
     int    track_bbox_history_size;   ///< Number of past bboxes stored per track for historical inflated-zone checks. Default: 5
     bool   use_motion_prediction;     ///< Predict track position with constant velocity before association. Default: true
-    double fast_track_speed;          ///< XY speed [m/s] above which a track uses fast_track_min_dynamic_frames. <= 0 = disabled. Default: 0.8
+    double fast_track_speed;          ///< XY speed [m/s] above which a track uses fast_track_min_dynamic_frames. <= 0 = disabled. Default: 0 (1-frame hysteresis caused large false positives on indoor data)
     int    fast_track_min_dynamic_frames; ///< Hysteresis for fast tracks (lower latency). Default: 1
     int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
 };

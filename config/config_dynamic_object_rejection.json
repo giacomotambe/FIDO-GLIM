@@ -30,8 +30,8 @@
     "static_cluster_penalty_factor": 0.5,
     "unmatched_dynamic_margin": 1.0,
     "long_baseline_frames": 3,
-    "w_shift_long": 0.5,
-    "keep_voxel_evidence": true,
+    "w_shift_long": 0.0,
+    "keep_voxel_evidence": false,
     "unlock_ratio_factor": 2.0
   }
 }

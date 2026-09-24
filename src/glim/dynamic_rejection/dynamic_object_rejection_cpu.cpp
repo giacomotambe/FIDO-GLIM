@@ -70,8 +70,8 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     static_cluster_penalty_factor  = config.param<double>(k, "static_cluster_penalty_factor",  0.5);
     unmatched_dynamic_margin       = config.param<double>(k, "unmatched_dynamic_margin",       1.0);
     long_baseline_frames           = config.param<int>   (k, "long_baseline_frames",           3);
-    w_shift_long                   = config.param<double>(k, "w_shift_long",                   0.5);
-    keep_voxel_evidence            = config.param<bool>  (k, "keep_voxel_evidence",            true);
+    w_shift_long                   = config.param<double>(k, "w_shift_long",                   0.0);
+    keep_voxel_evidence            = config.param<bool>  (k, "keep_voxel_evidence",            false);
     unlock_ratio_factor            = config.param<double>(k, "unlock_ratio_factor",            2.0);
 
     // Frame history must hold at least the long-baseline frame.
