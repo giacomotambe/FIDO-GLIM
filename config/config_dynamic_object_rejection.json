@@ -72,6 +72,10 @@
     "point_static_veto": false,
     "point_knn": 16,
     "sparse_voxel_mode": 1,
-    "visibility_min_filter": 1
+    "visibility_min_filter": 1,
+    "hybrid_enabled": true,
+    "hybrid_min_range": 20.0,
+    "hybrid_max_range": 40.0,
+    "hybrid_max_points": 8000
   }
 }

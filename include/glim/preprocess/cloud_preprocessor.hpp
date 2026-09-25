@@ -36,6 +36,7 @@ public:
   int k_correspondences;              ///< Number of neighboring points
 
   int num_threads;                    ///< Number of threads
+  bool keep_raw_points_for_rejection = false;  ///< Attach the raw scan to the frame (dynamic rejection hybrid mode)
   std::string dynamic_rejection_type;          ///< Type of dynamic rejection to apply ("BBOX", "VOXELMAP", or "NONE")
 };
 

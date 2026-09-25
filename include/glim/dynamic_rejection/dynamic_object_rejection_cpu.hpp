@@ -75,6 +75,11 @@ public:
     bool   point_static_veto;             ///< Points whose past rays saw a surface at the same range stay static.
     int    point_knn;
     bool   point_grow_on_visibility;      ///< Also grow (outside bboxes) into points that appeared in free space.                     ///< Neighbours examined per grown point.                  ///< Near-ground / ground voxels inside the XY footprint of a confirmed tall dynamic bbox and higher than this above ground are dynamic (< 0 = off).    ///< Voxels in velocity-inflated / historical zones need their own evidence (score or visibility).
+    // Hybrid density (extra far points from the raw scan, used only for the rejection)
+    bool   hybrid_enabled;                ///< Augment the frame with raw points in [hybrid_min_range, hybrid_max_range].
+    double hybrid_min_range;              ///< [m]
+    double hybrid_max_range;              ///< [m]
+    int    hybrid_max_points;             ///< Cap on added points per frame (<= 0 = no cap).
     // Pose handling
     bool   apply_lidar_imu_extrinsic;     ///< getPose() is T_world_imu: convert with T_imu_lidar from config_sensors (true in GLIM).
     Eigen::Isometry3d T_imu_lidar = Eigen::Isometry3d::Identity();
@@ -185,6 +190,16 @@ public:
         const PreprocessedFrame::Ptr&   source_frame,
         std::vector<BoundingBox>&       cluster_bboxes,
         const std::vector<BoundingBox>& historical_bboxes = {});
+
+    /**
+     * @brief Hybrid density: return a copy of `frame` augmented with the raw points whose XY range is in
+     *        [hybrid_min_range, hybrid_max_range] (at most hybrid_max_points, evenly strided). The added
+     *        points carry time = NaN and are dropped from the static/dynamic output frames by reject(),
+     *        so odometry receives exactly the original points. Returns `frame` itself when disabled or
+     *        when frame->raw_points is not available.
+     */
+    static PreprocessedFrame::Ptr make_hybrid_frame(const PreprocessedFrame::Ptr& frame, const DynamicObjectRejectionParamsCPU& params);
+    const DynamicObjectRejectionParamsCPU& params() const { return params_; }
 
     // -----------------------------------------------------------------------
     // Accessors

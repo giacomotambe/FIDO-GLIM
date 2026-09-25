@@ -78,6 +78,10 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     noise_deadzone_k               = config.param<double>(k, "noise_deadzone_k",               3.0);
     keep_voxel_evidence            = config.param<bool>  (k, "keep_voxel_evidence",            false);
     unlock_ratio_factor            = config.param<double>(k, "unlock_ratio_factor",            2.0);
+    hybrid_enabled                 = config.param<bool>  (k, "hybrid_enabled",                 true);
+    hybrid_min_range               = config.param<double>(k, "hybrid_min_range",               20.0);
+    hybrid_max_range               = config.param<double>(k, "hybrid_max_range",               40.0);
+    hybrid_max_points              = config.param<int>   (k, "hybrid_max_points",              8000);
     ground_band_m                  = config.param<double>(k, "ground_band_m",                  0.25);
     ground_cell_m                  = config.param<double>(k, "ground_cell_m",                  2.0);
     min_obj_height                 = config.param<double>(k, "min_obj_height",                 0.5);
@@ -998,6 +1002,41 @@ void DynamicObjectRejectionCPU::refine_points(const gtsam_points::DynamicVoxelMa
 
 
 // ===========================================================================
+// make_hybrid_frame()
+// ===========================================================================
+
+PreprocessedFrame::Ptr DynamicObjectRejectionCPU::make_hybrid_frame(
+    const PreprocessedFrame::Ptr& frame, const DynamicObjectRejectionParamsCPU& params)
+{
+    if (!params.hybrid_enabled || !frame || !frame->raw_points || frame->raw_points->points.empty()) return frame;
+    const auto& raw = *frame->raw_points;
+    const double r0 = params.hybrid_min_range * params.hybrid_min_range;
+    const double r1 = params.hybrid_max_range * params.hybrid_max_range;
+    std::vector<int> sel;
+    for (int i = 0; i < static_cast<int>(raw.points.size()); ++i) {
+        const double d2 = raw.points[i].head<2>().squaredNorm();
+        if (d2 >= r0 && d2 < r1 && raw.points[i].allFinite()) sel.push_back(i);
+    }
+    if (sel.empty()) return frame;
+    const int cap = params.hybrid_max_points;
+    const double step = (cap > 0 && static_cast<int>(sel.size()) > cap) ? static_cast<double>(sel.size()) / cap : 1.0;
+
+    auto aug = std::make_shared<PreprocessedFrame>(*frame);
+    aug->neighbors.clear();
+    aug->k_neighbors = 0;
+    const bool has_int = !aug->intensities.empty();
+    for (double f = 0.0; f < sel.size(); f += step) {
+        const int i = sel[static_cast<int>(f)];
+        Eigen::Vector4d p = raw.points[i]; p.w() = 1.0;
+        aug->points.push_back(p);
+        aug->times.push_back(std::numeric_limits<double>::quiet_NaN());   // marker: extra point
+        if (has_int) aug->intensities.push_back(i < static_cast<int>(raw.intensities.size()) ? raw.intensities[i] : 0.0);
+    }
+    return aug;
+}
+
+
+// ===========================================================================
 // collect_points()
 // ===========================================================================
 
@@ -1030,6 +1069,7 @@ void DynamicObjectRejectionCPU::collect_points(
         const auto& v = voxelmap.lookup_voxel(j);
         if (per_point && !point_dyn_[j].empty()) {
             for (size_t k = 0; k < v.voxel_points.size(); ++k) {
+                if (k < v.voxel_times.size() && std::isnan(v.voxel_times[k])) continue;   // hybrid extra point
                 const bool d = point_dyn_[j][k];
                 (d ? dynamic_pts : static_pts).push_back(v.voxel_points[k]);
                 if (k < v.voxel_intensities.size()) (d ? dynamic_int : static_int).push_back(v.voxel_intensities[k]);
@@ -1041,6 +1081,18 @@ void DynamicObjectRejectionCPU::collect_points(
         auto& pts  = v.is_dynamic ? dynamic_pts : static_pts;
         auto& ints = v.is_dynamic ? dynamic_int : static_int;
         auto& tims = v.is_dynamic ? dynamic_tim : static_tim;
+
+        bool has_extra = false;
+        for (const double t : v.voxel_times) if (std::isnan(t)) { has_extra = true; break; }
+        if (has_extra) {   // hybrid extra points never reach the output frames
+            for (size_t k = 0; k < v.voxel_points.size(); ++k) {
+                if (k < v.voxel_times.size() && std::isnan(v.voxel_times[k])) continue;
+                pts.push_back(v.voxel_points[k]);
+                if (k < v.voxel_intensities.size()) ints.push_back(v.voxel_intensities[k]);
+                if (k < v.voxel_times.size())       tims.push_back(v.voxel_times[k]);
+            }
+            continue;
+        }
 
         pts.insert(pts.end(),   v.voxel_points.begin(),      v.voxel_points.end());
         ints.insert(ints.end(), v.voxel_intensities.begin(), v.voxel_intensities.end());

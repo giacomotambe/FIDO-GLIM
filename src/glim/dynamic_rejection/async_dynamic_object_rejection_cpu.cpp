@@ -89,7 +89,10 @@ void AsyncDynamicObjectRejection::run() {
             // Step 1: WallFilter — voxelize + mark wall voxels
             // ------------------------------------------------------------------
             auto t_wall = std::chrono::steady_clock::now();
-            const WallFilterResult wf = wall_filter_->filter(*frame);
+            // Hybrid density: the rejection works on the frame + far raw points; the output
+            // frames contain only the original points (extra ones are dropped in reject()).
+            const auto work = DynamicObjectRejectionCPU::make_hybrid_frame(frame, dynamic_rejection_->params());
+            const WallFilterResult wf = wall_filter_->filter(*work);
             const double dt_wall = T(t_wall);
             spdlog::debug("[PERF] wall_filter      {:.1f} ms  ({} vox)", dt_wall, wf.num_total_voxels);
 
