@@ -78,6 +78,7 @@ void BoundingBox::transform(const Eigen::Isometry3d& T) {
     // Aggiorna centro e rotazione
     center = T * center;
     if (has_centroid_) centroid_ = T * centroid_;
+    for (auto& p : parts_) p.transform(T);
     rotation = T.linear() * rotation;
 
     // Aggiorna la matrice inversa per contains()

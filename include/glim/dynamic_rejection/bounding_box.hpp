@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vector>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
@@ -31,6 +32,15 @@ public:
     ~BoundingBox() = default;
 
     bool contains(const Eigen::Vector4d& point) const;
+    /// For bboxes merged from fragments: true if the point lies in one of the fragment boxes
+    /// (the union is used for decisions, the parts for labelling). Same as contains() otherwise.
+    bool contains_parts(const Eigen::Vector4d& point) const {
+        if (parts_.empty()) return contains(point);
+        for (const auto& p : parts_) if (p.contains(point)) return true;
+        return false;
+    }
+    const std::vector<BoundingBox>& parts() const { return parts_; }
+    void set_parts(std::vector<BoundingBox> p) { parts_ = std::move(p); }
     /// Returns true if `inner` is fully contained inside this bbox (AABB check).
     bool contains_bbox(const BoundingBox& inner) const;
     void transform(const Eigen::Isometry3d& T);
@@ -91,6 +101,7 @@ private:
     Eigen::Vector3d centroid_ = Eigen::Vector3d::Zero();
     bool has_centroid_ = false;
     double window_speed_ = 0.0;
+    std::vector<BoundingBox> parts_;
     int  track_id;  ///< -1 = untracked / phantom
     // Precomputed for contains()
     Eigen::Matrix3d R_inv;

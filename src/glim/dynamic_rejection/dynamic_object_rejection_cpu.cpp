@@ -331,7 +331,7 @@ void DynamicObjectRejectionCPU::index_voxel_bboxes(
         auto& out = voxel_bboxes_[j];
         for (int c = 0; c < n_clusters; ++c) {
             const auto& b = cluster_bboxes[c];
-            if (b.contains(mean)) {
+            if (b.contains_parts(mean)) {
                 out.emplace_back(c, true);
             } else if (b.is_dynamic_bbox() && b.contains_inflated(mean, inflate_params_)) {
                 out.emplace_back(c, false);

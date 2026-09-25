@@ -565,6 +565,12 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_nearby_clusters(
                     if (lxy > params_.frag_max_len || sxy > params_.frag_max_wid || hz > params_.frag_max_hgt) continue;
                     u.set_track_id(ti != -1 ? ti : tj);
                     u.set_dynamic(w[i].is_dynamic_bbox() || w[j].is_dynamic_bbox());
+                    std::vector<BoundingBox> parts;
+                    for (const BoundingBox* b : {&w[i], &w[j]}) {
+                        if (b->parts().empty()) { BoundingBox c = *b; c.set_parts({}); parts.push_back(c); }
+                        else parts.insert(parts.end(), b->parts().begin(), b->parts().end());
+                    }
+                    u.set_parts(std::move(parts));
                     w[i] = u; gone[j] = true; merged = true;
                 }
             }
