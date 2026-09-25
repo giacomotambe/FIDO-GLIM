@@ -42,6 +42,12 @@
     "dbscan_cell_range": 1,
     "cluster_max_range": 40.0,
     "cluster_max_height": 4.0,
-    "cluster_ground_cell": 2.0
+    "cluster_ground_cell": 2.0,
+    "eps_range_k": 0.0,
+    "frag_merge_gap": 0.5,
+    "frag_merge_gap_k": 0.02,
+    "frag_max_len": 6.0,
+    "frag_max_wid": 3.0,
+    "frag_max_hgt": 4.0
   }
 }

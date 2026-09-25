@@ -84,6 +84,12 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     cluster_max_range             = config.param<double>("dynamic_cluster_extractor", "cluster_max_range",             40.0);
     cluster_max_height            = config.param<double>("dynamic_cluster_extractor", "cluster_max_height",            4.0);
     cluster_ground_cell           = config.param<double>("dynamic_cluster_extractor", "cluster_ground_cell",           2.0);
+    eps_range_k                   = config.param<double>("dynamic_cluster_extractor", "eps_range_k",                   0.0);
+    frag_merge_gap                = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap",                0.5);
+    frag_merge_gap_k              = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap_k",              0.02);
+    frag_max_len                  = config.param<double>("dynamic_cluster_extractor", "frag_max_len",                  6.0);
+    frag_max_wid                  = config.param<double>("dynamic_cluster_extractor", "frag_max_wid",                  3.0);
+    frag_max_hgt                  = config.param<double>("dynamic_cluster_extractor", "frag_max_hgt",                  4.0);
     release_static_frames         = config.param<int>   ("dynamic_cluster_extractor", "release_static_frames",         0);
 
     spdlog::debug("[cluster_extractor] eps_factor={:.2f} min_pts={} knn_max={} "
@@ -294,11 +300,16 @@ DynamicClusterExtractor::cluster_voxels(
         if (params_.dbscan_voxel_hash) {
             std::vector<int> neighbors;
             const Eigen::Vector3i& c0 = coords[local_idx];
-            for (int dx = -R; dx <= R; ++dx) for (int dy = -R; dy <= R; ++dy) for (int dz = -R; dz <= R; ++dz) {
+            double e2 = eps2; int Rq = R;
+            if (params_.eps_range_k > 0.0) {
+                const double e = std::max(eps, params_.eps_range_k * active_cents[local_idx].head<2>().norm());
+                e2 = e * e; Rq = std::max(R, static_cast<int>(std::ceil(e / voxel_res)));
+            }
+            for (int dx = -Rq; dx <= Rq; ++dx) for (int dy = -Rq; dy <= Rq; ++dy) for (int dz = -Rq; dz <= Rq; ++dz) {
                 if (!dx && !dy && !dz) continue;
                 auto it = cell_of.find(ckey(Eigen::Vector3i(c0.x() + dx, c0.y() + dy, c0.z() + dz)));
                 if (it == cell_of.end()) continue;
-                if ((active_cents[it->second] - active_cents[local_idx]).head<3>().squaredNorm() <= eps2) neighbors.push_back(it->second);
+                if ((active_cents[it->second] - active_cents[local_idx]).head<3>().squaredNorm() <= e2) neighbors.push_back(it->second);
             }
             return neighbors;
         }
@@ -530,6 +541,39 @@ static BoundingBox compute_union_bbox(const BoundingBox& a, const BoundingBox& b
 std::vector<BoundingBox> DynamicClusterExtractor::merge_nearby_clusters(
     const std::vector<BoundingBox>& bboxes) const
 {
+    if (params_.frag_merge_gap >= 0.0 && !bboxes.empty()) {
+        // Fragment merge: AABB gap (not centre distance) below a range-dependent threshold and
+        // union size still plausible for a single object. Iterates to convergence.
+        std::vector<BoundingBox> w(bboxes);
+        bool merged = true;
+        while (merged) {
+            merged = false;
+            std::vector<bool> gone(w.size(), false);
+            for (size_t i = 0; i < w.size(); ++i) {
+                if (gone[i]) continue;
+                for (size_t j = i + 1; j < w.size(); ++j) {
+                    if (gone[j]) continue;
+                    const int ti = w[i].get_track_id(), tj = w[j].get_track_id();
+                    if (ti != -1 && tj != -1 && ti != tj) continue;
+                    const Eigen::Vector3d gap = ((w[i].get_center() - w[j].get_center()).cwiseAbs()
+                                                 - 0.5 * (w[i].get_size() + w[j].get_size())).cwiseMax(0.0);
+                    const double r = 0.5 * (w[i].get_center() + w[j].get_center()).head<2>().norm();
+                    if (gap.norm() > params_.frag_merge_gap + params_.frag_merge_gap_k * r) continue;
+                    BoundingBox u = compute_union_bbox(w[i], w[j]);
+                    Eigen::Vector3d s = u.get_size(); const double hz = s.z();
+                    const double lxy = std::max(s.x(), s.y()), sxy = std::min(s.x(), s.y());
+                    if (lxy > params_.frag_max_len || sxy > params_.frag_max_wid || hz > params_.frag_max_hgt) continue;
+                    u.set_track_id(ti != -1 ? ti : tj);
+                    u.set_dynamic(w[i].is_dynamic_bbox() || w[j].is_dynamic_bbox());
+                    w[i] = u; gone[j] = true; merged = true;
+                }
+            }
+            std::vector<BoundingBox> tmp;
+            for (size_t i = 0; i < w.size(); ++i) if (!gone[i]) tmp.push_back(w[i]);
+            w.swap(tmp);
+        }
+        return w;
+    }
     if (params_.peer_merge_distance <= 0.0 || bboxes.empty()) return bboxes;
 
     const double d2_max = params_.peer_merge_distance * params_.peer_merge_distance;

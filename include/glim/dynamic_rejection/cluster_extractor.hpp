@@ -87,7 +87,12 @@ public:
     int    dbscan_cell_range;         ///< Hash neighbourhood half-size in cells (1 = 26-neighbourhood, 2 = exact for eps <= 1.5 voxels).
     double cluster_max_range;         ///< Voxels farther than this (XY) are not clustered (<= 0 = off).
     double cluster_max_height;        ///< Voxels higher than this above the local ground are not clustered (<= 0 = off).
-    double cluster_ground_cell;       ///< XY cell size of the local ground estimate used by cluster_max_height.     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
+    double cluster_ground_cell;
+    // Fragmentation
+    double eps_range_k;               ///< eps(r) = max(eps, eps_range_k * r): sparse far objects stay connected (0 = off).
+    double frag_merge_gap;            ///< Merge bboxes whose AABB gap <= frag_merge_gap + frag_merge_gap_k * r (< 0 = off).
+    double frag_merge_gap_k;
+    double frag_max_len, frag_max_wid, frag_max_hgt;  ///< A merged bbox must stay within these sorted dimensions [m].       ///< XY cell size of the local ground estimate used by cluster_max_height.     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
     int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
 };
 
