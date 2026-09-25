@@ -37,6 +37,11 @@
     "assoc_gate_per_range": 0.03,
     "assoc_gate_per_missed": 0.3,
     "release_static_frames": 0,
-    "apply_lidar_imu_extrinsic": true
+    "apply_lidar_imu_extrinsic": true,
+    "dbscan_voxel_hash": true,
+    "dbscan_cell_range": 1,
+    "cluster_max_range": 40.0,
+    "cluster_max_height": 4.0,
+    "cluster_ground_cell": 2.0
   }
 }

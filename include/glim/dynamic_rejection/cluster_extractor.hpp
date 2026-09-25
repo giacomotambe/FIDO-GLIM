@@ -81,7 +81,13 @@ public:
     double assoc_gate_per_range;      ///< Gate increase per metre of range. Default: 0.03
     double assoc_gate_per_missed;     ///< Gate increase per missed frame. Default: 0.3
     Eigen::Isometry3d T_imu_lidar = Eigen::Isometry3d::Identity();  ///< from config_sensors when apply_lidar_imu_extrinsic
-    int    release_static_frames;     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
+    int    release_static_frames;
+    // Performance / region of interest
+    bool   dbscan_voxel_hash;         ///< Neighbour search through a voxel-coordinate hash instead of a KD-tree.
+    int    dbscan_cell_range;         ///< Hash neighbourhood half-size in cells (1 = 26-neighbourhood, 2 = exact for eps <= 1.5 voxels).
+    double cluster_max_range;         ///< Voxels farther than this (XY) are not clustered (<= 0 = off).
+    double cluster_max_height;        ///< Voxels higher than this above the local ground are not clustered (<= 0 = off).
+    double cluster_ground_cell;       ///< XY cell size of the local ground estimate used by cluster_max_height.     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
     int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
 };
 

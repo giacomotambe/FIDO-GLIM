@@ -14,6 +14,7 @@
 #include <glim/dynamic_rejection/cluster_extractor.hpp>
 
 #include <algorithm>
+#include <memory>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -78,6 +79,11 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
         Config sensors(GlobalConfig::get_config_path("config_sensors"));
         T_imu_lidar = sensors.param<Eigen::Isometry3d>("sensors", "T_lidar_imu", Eigen::Isometry3d::Identity()).inverse();
     }
+    dbscan_voxel_hash             = config.param<bool>  ("dynamic_cluster_extractor", "dbscan_voxel_hash",             true);
+    dbscan_cell_range             = config.param<int>   ("dynamic_cluster_extractor", "dbscan_cell_range",             1);
+    cluster_max_range             = config.param<double>("dynamic_cluster_extractor", "cluster_max_range",             40.0);
+    cluster_max_height            = config.param<double>("dynamic_cluster_extractor", "cluster_max_height",            4.0);
+    cluster_ground_cell           = config.param<double>("dynamic_cluster_extractor", "cluster_ground_cell",           2.0);
     release_static_frames         = config.param<int>   ("dynamic_cluster_extractor", "release_static_frames",         0);
 
     spdlog::debug("[cluster_extractor] eps_factor={:.2f} min_pts={} knn_max={} "
@@ -221,12 +227,35 @@ DynamicClusterExtractor::cluster_voxels(
     active_ids.reserve(nvox);
     active_cents.reserve(nvox);
 
+    // Local ground height (min z per XY cell + 8 neighbours) for the height ROI.
+    std::unordered_map<int64_t, float> gz;
+    const double ginv = 1.0 / std::max(0.1, params_.cluster_ground_cell);
+    const auto gkey = [](int x, int y) { return (static_cast<int64_t>(x) << 32) ^ static_cast<uint32_t>(y); };
+    if (params_.cluster_max_height > 0.0) {
+        for (int i = 0; i < nvox; ++i) {
+            const auto& m = voxelmap->lookup_voxel(i).mean;
+            const int64_t k = gkey(static_cast<int>(std::floor(m.x() * ginv)), static_cast<int>(std::floor(m.y() * ginv)));
+            auto it = gz.find(k);
+            if (it == gz.end()) gz.emplace(k, static_cast<float>(m.z())); else it->second = std::min(it->second, static_cast<float>(m.z()));
+        }
+    }
+    const auto ground_at = [&](const Eigen::Vector4d& m) {
+        const int cx = static_cast<int>(std::floor(m.x() * ginv)), cy = static_cast<int>(std::floor(m.y() * ginv));
+        float g = std::numeric_limits<float>::infinity();
+        for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) {
+            auto it = gz.find(gkey(cx + dx, cy + dy)); if (it != gz.end()) g = std::min(g, it->second);
+        }
+        return g;
+    };
+    const double max_r2 = params_.cluster_max_range > 0.0 ? params_.cluster_max_range * params_.cluster_max_range
+                                                          : std::numeric_limits<double>::infinity();
     for (int i = 0; i < nvox; ++i) {
         const auto& v = voxelmap->lookup_voxel(i);
-        if (!v.is_wall && !v.is_ground && !v.is_outlier) {
-            active_ids.push_back(i);
-            active_cents.push_back(v.mean);
-        }
+        if (v.is_wall || v.is_ground || v.is_outlier) continue;
+        if (v.mean.head<2>().squaredNorm() > max_r2) continue;                                   // too far
+        if (params_.cluster_max_height > 0.0 && v.mean.z() - ground_at(v.mean) > params_.cluster_max_height) continue;  // canopy / facades
+        active_ids.push_back(i);
+        active_cents.push_back(v.mean);
     }
 
     const int n_active = static_cast<int>(active_ids.size());
@@ -242,12 +271,40 @@ DynamicClusterExtractor::cluster_voxels(
     spdlog::debug("[DBSCAN] voxel_res={:.3f} eps={:.3f} min_pts={} knn_k={}",
                   voxel_res, eps, min_pts, knn_k);
 
-    gtsam_points::KdTree tree(active_cents.data(), n_active);
+    // Neighbour search backend: voxel-coordinate hash (O(n)) or KD-tree (legacy).
+    std::unique_ptr<gtsam_points::KdTree> tree;
+    std::unordered_map<int64_t, int> cell_of;
+    std::vector<Eigen::Vector3i> coords;
+    const auto ckey = [](const Eigen::Vector3i& c) {
+        return ((static_cast<int64_t>(c.x()) & 0x1FFFFF) << 42) | ((static_cast<int64_t>(c.y()) & 0x1FFFFF) << 21) | (static_cast<int64_t>(c.z()) & 0x1FFFFF);
+    };
+    if (params_.dbscan_voxel_hash) {
+        cell_of.reserve(n_active * 2);
+        coords.resize(n_active);
+        for (int i = 0; i < n_active; ++i) {
+            coords[i] = voxelmap->voxel_coord(active_cents[i]);
+            cell_of.emplace(ckey(coords[i]), i);
+        }
+    } else {
+        tree = std::make_unique<gtsam_points::KdTree>(active_cents.data(), n_active);
+    }
+    const int R = std::max(1, params_.dbscan_cell_range);
 
     auto range_query = [&](int local_idx) -> std::vector<int> {
+        if (params_.dbscan_voxel_hash) {
+            std::vector<int> neighbors;
+            const Eigen::Vector3i& c0 = coords[local_idx];
+            for (int dx = -R; dx <= R; ++dx) for (int dy = -R; dy <= R; ++dy) for (int dz = -R; dz <= R; ++dz) {
+                if (!dx && !dy && !dz) continue;
+                auto it = cell_of.find(ckey(Eigen::Vector3i(c0.x() + dx, c0.y() + dy, c0.z() + dz)));
+                if (it == cell_of.end()) continue;
+                if ((active_cents[it->second] - active_cents[local_idx]).head<3>().squaredNorm() <= eps2) neighbors.push_back(it->second);
+            }
+            return neighbors;
+        }
         std::vector<size_t> k_idx(knn_k);
         std::vector<double> k_sq (knn_k);
-        const size_t found = tree.knn_search(
+        const size_t found = tree->knn_search(
             active_cents[local_idx].data(), knn_k, k_idx.data(), k_sq.data());
 
         std::vector<int> neighbors;
@@ -594,13 +651,19 @@ void DynamicClusterExtractor::label_bboxes_from_tracks(
 {
     const double D2 = params_.track_match_distance * params_.track_match_distance;
 
+    // Predict every track once (was: once per track x bbox pair).
+    std::vector<BoundingBox> preds;
+    preds.reserve(tracks_.size());
+    for (const auto& t : tracks_) preds.push_back(predicted_bbox(t, T_to_current, dt));
+
     for (auto& bbox : bboxes) {
         double best_ov  = 0.0;
         bool   is_dyn   = false;
         int    best_tid = -1;
 
-        for (const auto& t : tracks_) {
-            const BoundingBox pred = predicted_bbox(t, T_to_current, dt);
+        for (size_t ti = 0; ti < tracks_.size(); ++ti) {
+            const auto& t = tracks_[ti];
+            const BoundingBox& pred = preds[ti];
             double score;
             if (params_.use_centroid_association) {
                 const double gate = params_.assoc_gate_base + params_.assoc_gate_per_range * bbox.get_centroid().head<2>().norm()
