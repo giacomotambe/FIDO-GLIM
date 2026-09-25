@@ -15,7 +15,7 @@
     "w_neighbor": 0.2,
     "points_limit": 0.05,
     "dynamic_cluster_ratio": 0.3,
-    "cluster_propagation_threshold": 0.3,
+    "cluster_propagation_threshold": 0.45,
     "motion_threshold_scale": 0.0,
     "rotation_threshold_scale": 0.0,
     "min_shift_m": 0.03,
@@ -70,6 +70,8 @@
     "point_grow_radius_max": 0.5,
     "point_bbox_margin": 0.3,
     "point_static_veto": false,
-    "point_knn": 16
+    "point_knn": 16,
+    "sparse_voxel_mode": 1,
+    "visibility_min_filter": 1
   }
 }

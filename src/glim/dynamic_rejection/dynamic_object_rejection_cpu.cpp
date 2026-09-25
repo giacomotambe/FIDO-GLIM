@@ -58,8 +58,9 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     history_factor                 = config.param<double>(k, "history_factor",                 0.3);  // unused
     frame_num_memory               = config.param<int>   (k, "frame_num_memory",               5);
     points_limit                   = config.param<double>(k, "points_limit",                   0.05);
+    sparse_voxel_mode              = config.param<int>   (k, "sparse_voxel_mode",              1);
     min_voxel_points               = config.param<int>   (k, "min_voxel_points",               -1);
-    cluster_propagation_threshold  = config.param<double>(k, "cluster_propagation_threshold",  0.3);
+    cluster_propagation_threshold  = config.param<double>(k, "cluster_propagation_threshold",  0.45);
     motion_threshold_scale         = config.param<double>(k, "motion_threshold_scale",         0.0);
     rotation_threshold_scale       = config.param<double>(k, "rotation_threshold_scale",       0.0);
     min_shift_m                    = config.param<double>(k, "min_shift_m",                    0.03);
@@ -110,6 +111,7 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     visibility_min_age             = config.param<int>   (k, "visibility_min_age",             3);
     visibility_max_age             = config.param<int>   (k, "visibility_max_age",             5);
     visibility_max_incidence_deg   = config.param<double>(k, "visibility_max_incidence_deg",   75.0);
+    visibility_min_filter          = config.param<int>   (k, "visibility_min_filter",          1);
     visibility_keep_frac           = config.param<double>(k, "visibility_keep_frac",           2.0);
     visibility_keep_min_points     = config.param<int>   (k, "visibility_keep_min_points",     2);
     evidence_enabled               = config.param<bool>  (k, "evidence_enabled",               false);
@@ -423,8 +425,18 @@ void DynamicObjectRejectionCPU::score_voxels(
         cur.dynamic_score = 0.0;
 
         if (cur.is_wall || cur.is_ground || cur.is_outlier) return;
-        if (cur.num_points < points_thr) return;
+        const bool sparse = cur.num_points < points_thr;
+        if (sparse && params_.sparse_voxel_mode == 0) return;
         if (!hag_.empty() && hag_[j] < params_.ground_band_m) return;      // near-ground band
+        if (sparse && params_.sparse_voxel_mode == 2) {
+            // Too few points for a reliable centroid: decide on the per-point free-space test only.
+            const double vis = vis_frac_.empty() ? 0.0 : vis_frac_[j];
+            cur.dynamic_score = params_.w_visibility * vis;
+            const bool in_dyn = [&] { for (const auto& e : voxel_bboxes_[j]) if (cluster_bboxes[e.first].is_dynamic_bbox()) return true; return false; }();
+            const double thr = params_.dynamic_score_threshold * motion_scale_ * (in_dyn ? params_.tier1_threshold_factor : params_.unconstrained_threshold_factor);
+            if (vis > 0.0 && cur.dynamic_score > thr) { cur.is_dynamic = true; mark_dynamic(j, cur.mean); }
+            return;
+        }
 
         // ---- Cluster bbox check (base AABB + velocity-inflated ellipsoid) ----
         // Dynamic-wins policy: if a voxel overlaps both a static and a dynamic
@@ -611,7 +623,7 @@ void DynamicObjectRejectionCPU::compute_ground_heights(const gtsam_points::Dynam
 // point now occupies space that was observed free -> "appeared" (dynamic evidence).
 // Only this direction is used: "farther than before" can be mere disocclusion.
 
-static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapCPU& vm, int rows, int cols, double res) {
+static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapCPU& vm, int rows, int cols, double res, int F) {
     std::vector<float> img(rows * cols, std::numeric_limits<float>::infinity());
     const int n = static_cast<int>(vm.gtsam_points::IncrementalVoxelMap<gtsam_points::DynamicGaussianVoxel>::num_voxels());
     for (int v = 0; v < n; ++v)
@@ -626,9 +638,9 @@ static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapC
     for (int r = 0; r < rows; ++r)
         for (int c = 0; c < cols; ++c) {
             float m = std::numeric_limits<float>::infinity();
-            for (int dr = -1; dr <= 1; ++dr) {
+            for (int dr = -F; dr <= F; ++dr) {
                 const int rr = r + dr; if (rr < 0 || rr >= rows) continue;
-                for (int dc = -1; dc <= 1; ++dc) m = std::min(m, img[rr * cols + (c + dc + cols) % cols]);
+                for (int dc = -F; dc <= F; ++dc) m = std::min(m, img[rr * cols + (c + dc + cols) % cols]);
             }
             out[r * cols + c] = m;
         }
@@ -648,7 +660,7 @@ void DynamicObjectRejectionCPU::compute_visibility(
 
     // Range images are cached per history entry (built once, in their own frame).
     while (range_img_history_.size() < voxelmap_history_.size())
-        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res));
+        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter)));
 
     const int hist = static_cast<int>(voxelmap_history_.size());
     std::vector<int> ages;

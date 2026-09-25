@@ -36,7 +36,8 @@ public:
     double w_history;
     double w_history_dynamic;  ///< UNUSED (kept for config compatibility).
     double points_limit;       ///< Legacy min-points gate: voxel needs >= points_limit * voxel_res * 100 points (used when min_voxel_points < 0).
-    int    min_voxel_points;   ///< Minimum raw points per voxel to be scored. < 0 = use legacy points_limit formula.
+    int    min_voxel_points;
+    int    sparse_voxel_mode;  ///< Voxels below the min-points gate: 0 = skip (legacy), 1 = score normally, 2 = visibility evidence only.   ///< Minimum raw points per voxel to be scored. < 0 = use legacy points_limit formula.
     // History
     double history_factor;     ///< UNUSED (kept for config compatibility).
     int    frame_num_memory;
@@ -96,6 +97,7 @@ public:
     int    visibility_min_age;            ///< Oldest/youngest past frames used: t-max_age .. t-min_age.
     int    visibility_max_age;
     double visibility_max_incidence_deg;
+    int    visibility_min_filter;         ///< Half-size of the min filter on past range images (1 = 3x3, 0 = none).
     double visibility_keep_frac;          ///< Outside every bbox, keep a voxel dynamic if >= this fraction of its points appeared in free space (> 1 = off).
     int    visibility_keep_min_points;    ///< ... and it has at least this many points.  ///< Ignore current points seen at grazing incidence (surface normal vs ray) above this angle.
     // World-frame dynamic evidence grid (temporal consistency independent of track IDs)
