@@ -114,6 +114,7 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     visibility_rel_thr             = config.param<double>(k, "visibility_rel_thr",             0.03);
     visibility_min_age             = config.param<int>   (k, "visibility_min_age",             3);
     visibility_max_age             = config.param<int>   (k, "visibility_max_age",             5);
+    visibility_age_step            = config.param<int>   (k, "visibility_age_step",            1);
     visibility_max_incidence_deg   = config.param<double>(k, "visibility_max_incidence_deg",   75.0);
     visibility_min_filter          = config.param<int>   (k, "visibility_min_filter",          1);
     visibility_keep_frac           = config.param<double>(k, "visibility_keep_frac",           2.0);
@@ -125,6 +126,9 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     evidence_on                    = config.param<double>(k, "evidence_on",                    1.5);
     evidence_off                   = config.param<double>(k, "evidence_off",                   0.5);
 
+    // History-suppression depth stays at the configured frame_num_memory; the stored
+    // history may be longer to serve the long baseline and the free-space test.
+    history_frames = frame_num_memory;
     // Frame history must hold at least the long-baseline frame.
     if (frame_num_memory < compare_baseline_frames)
         frame_num_memory = compare_baseline_frames;
@@ -400,7 +404,7 @@ void DynamicObjectRejectionCPU::score_voxels(
     dynamic_voxels.clear();
 
     const int hist_size  = static_cast<int>(voxelmap_history_.size());
-    const int hist_depth = std::min(params_.frame_num_memory, hist_size) - 1;
+    const int hist_depth = std::min(params_.history_frames, hist_size) - 1;
 
     // Baseline frame t-K lives at voxelmap_history_[hist_size - K]
     // (voxelmap_history_.back() is t-1). Centroid noise between two scans is ~constant
@@ -668,7 +672,7 @@ void DynamicObjectRejectionCPU::compute_visibility(
 
     const int hist = static_cast<int>(voxelmap_history_.size());
     std::vector<int> ages;
-    for (int age = params_.visibility_min_age; age <= params_.visibility_max_age; ++age)
+    for (int age = params_.visibility_min_age; age <= params_.visibility_max_age; age += std::max(1, params_.visibility_age_step))
         if (hist - age >= 0) ages.push_back(hist - age);
     if (ages.empty()) return;
 

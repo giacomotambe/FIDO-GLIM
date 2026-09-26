@@ -101,6 +101,8 @@ public:
     double visibility_rel_thr;            ///< Relative part of the threshold.
     int    visibility_min_age;            ///< Oldest/youngest past frames used: t-max_age .. t-min_age.
     int    visibility_max_age;
+    int    visibility_age_step;      ///< Stride between the past scans used by the free-space test.
+    int    history_frames;           ///< Frames used by history suppression (= configured frame_num_memory).
     double visibility_max_incidence_deg;
     int    visibility_min_filter;         ///< Half-size of the min filter on past range images (1 = 3x3, 0 = none).
     double visibility_keep_frac;          ///< Outside every bbox, keep a voxel dynamic if >= this fraction of its points appeared in free space (> 1 = off).
