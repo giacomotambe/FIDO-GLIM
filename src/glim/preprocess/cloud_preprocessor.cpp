@@ -42,11 +42,13 @@ CloudPreprocessorParams::CloudPreprocessorParams() {
 
 
   dynamic_rejection_type = ros_config.param<std::string>("glim_ros", "dynamic_rejection_type", "NONE");
-  // Keep the raw scan in the frame only if the voxel rejection runs in hybrid-density mode.
+  // Keep the raw scan in the frame only if the voxel rejection uses it (hybrid density, raw range images / map).
   {
     Config rej_config(GlobalConfig::get_config_path("config_dynamic_object_rejection"));
     keep_raw_points_for_rejection = dynamic_rejection_type != "NONE" &&
-                                    rej_config.param<bool>("dynamic_object_rejection", "hybrid_enabled", true);
+                                    (rej_config.param<bool>("dynamic_object_rejection", "hybrid_enabled", true) ||
+                                     rej_config.param<bool>("dynamic_object_rejection", "vis_raw", false) ||
+                                     rej_config.param<bool>("dynamic_object_rejection", "fs_raw", false));
   }
   if (enable_cropbox_filter) {
     Eigen::Isometry3d T_lidar_imu = sensor_config.param<Eigen::Isometry3d>("sensors", "T_lidar_imu", Eigen::Isometry3d::Identity());
