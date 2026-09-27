@@ -68,6 +68,15 @@ public:
     double foot_min_hag;
     // Point-level refinement (final step)
     double point_ground_cut;              ///< Points of dynamic voxels lower than this above the local ground stay static (<= 0 = off).
+    bool   fs_enabled;                    ///< Use the world-frame free-space map as extra visibility evidence.
+    double fs_res;                        ///< Cell size [m].
+    int    fs_min_free;                   ///< A cell is "known free" after this many free frames ...
+    double fs_free_ratio;                 ///< ... and free >= ratio * occ.
+    int    fs_ray_stride;                 ///< Integrate one ray every N points.
+    double fs_max_range;                  ///< Rays / queries only within this range [m].
+    double fs_margin;                     ///< Ray stops max(margin, margin_rel * d) before the hit.
+    double fs_margin_rel;
+    int    fs_dilate;                     ///< Neighbourhood (cells) that must also be void.                    ///< Free observations must be at least this many frames old.
     double point_ground_cut_min_range;    ///< The ground cut applies only beyond this range [m].
     double point_ground_cut_k;            ///< Range slope of the cut: cut(r) = point_ground_cut + k * r.
     bool   point_refine_enabled;          ///< Label individual points: grow from dynamic seeds, veto points with static free-space evidence.
@@ -302,6 +311,13 @@ private:
     std::deque<Eigen::Isometry3d> pose_history_;
     std::deque<Eigen::Isometry3d> abs_pose_history_;   ///< T_world_sensor of each voxelmap_history_ entry.
     std::vector<float> vis_frac_;
+    /// Local free-space map in the world frame (DUFOMap-like): per cell, number of frames in which a
+    /// ray crossed it (free) or ended in it (occ). Long memory without keeping the past scans.
+    struct FsCell { uint16_t free = 0, occ = 0; uint32_t last_free = 0, last_occ = 0; };
+    std::unordered_map<int64_t, FsCell> fs_map_;
+    uint32_t fs_frame_ = 0;
+    void fs_query(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
+    void fs_integrate(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
     std::vector<float> hag_;
     std::vector<std::vector<uint8_t>> vis_pt_;     ///< Per voxel, per point: 0 unknown, 1 appeared in free space, 2 consistent with the past.
     std::vector<std::vector<uint8_t>> point_dyn_;  ///< Per voxel, per point final label (empty = use voxel label).
