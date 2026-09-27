@@ -95,8 +95,9 @@ void BoundingBox::inflate(double margin) {
 
 double BoundingBox::iou(const BoundingBox& other) const {
     // Intersezione: clamp dei bound sovrapposti
-    const Eigen::Vector3d inter_min = (center - half_size).cwiseMax(other.center - other.half_size);
-    const Eigen::Vector3d inter_max = (center + half_size).cwiseMin(other.center + other.half_size);
+    const Eigen::Vector3d ha = aabb_half_extent(), hb = other.aabb_half_extent();
+    const Eigen::Vector3d inter_min = (center - ha).cwiseMax(other.center - hb);
+    const Eigen::Vector3d inter_max = (center + ha).cwiseMin(other.center + hb);
     const Eigen::Vector3d inter_size = (inter_max - inter_min).cwiseMax(Eigen::Vector3d::Zero());
 
     const double vol_inter = inter_size.x() * inter_size.y() * inter_size.z();
@@ -159,8 +160,9 @@ bool BoundingBox::contains_inflated(const Eigen::Vector4d& point,
 }
 
 double BoundingBox::overlap(const BoundingBox& other) const {
-    const Eigen::Vector3d inter_min = (center - half_size).cwiseMax(other.center - other.half_size);
-    const Eigen::Vector3d inter_max = (center + half_size).cwiseMin(other.center + other.half_size);
+    const Eigen::Vector3d ha = aabb_half_extent(), hb = other.aabb_half_extent();
+    const Eigen::Vector3d inter_min = (center - ha).cwiseMax(other.center - hb);
+    const Eigen::Vector3d inter_max = (center + ha).cwiseMin(other.center + hb);
     const Eigen::Vector3d inter_size = (inter_max - inter_min).cwiseMax(Eigen::Vector3d::Zero());
 
     const double vol_inter = inter_size.x() * inter_size.y() * inter_size.z();

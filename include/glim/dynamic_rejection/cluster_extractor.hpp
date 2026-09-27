@@ -95,6 +95,12 @@ public:
     double frag_merge_gap;            ///< Merge bboxes whose AABB gap <= frag_merge_gap + frag_merge_gap_k * r (< 0 = off).
     double frag_merge_gap_k;
     /// Track-level evidence accumulation: e <- decay*e + (frame_evidence - bias), confirmed when e >= on (on <= 0 = off).
+    /// Yaw-oriented boxes (XY PCA) for elongated clusters with >= obb_min_points, eigenvalue ratio
+    /// >= obb_min_elongation, used only if the OBB footprint < obb_max_area_ratio * AABB footprint.
+    bool   use_obb;
+    int    obb_min_points;
+    double obb_min_elongation;
+    double obb_max_area_ratio;
     double track_evidence_decay;
     double track_evidence_bias;
     double track_evidence_on;

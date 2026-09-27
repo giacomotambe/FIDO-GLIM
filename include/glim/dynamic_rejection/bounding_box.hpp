@@ -54,6 +54,8 @@ public:
     // Getters (needed by WallBBoxRegistry for IoU / merge operations)
     // -----------------------------------------------------------------------
     const Eigen::Vector3d& get_size()     const { return size; }
+    /// Half extent of the axis-aligned box enclosing this (possibly rotated) box.
+    Eigen::Vector3d aabb_half_extent() const { return rotation.cwiseAbs() * (0.5 * size); }
     const Eigen::Vector3d& get_center()   const { return center; }
     /// Mean of the cluster points (more stable than the AABB center under shape changes).
     /// Falls back to the AABB center when not set.

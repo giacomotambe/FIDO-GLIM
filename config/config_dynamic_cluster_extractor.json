@@ -53,6 +53,10 @@
     "track_evidence_bias": 0.6,
     "track_evidence_on": 0.5,
     "track_evidence_max": 2.0,
-    "confirmed_hold_frames": 0
+    "confirmed_hold_frames": 0,
+    "use_obb": false,
+    "obb_min_points": 8,
+    "obb_min_elongation": 2.0,
+    "obb_max_area_ratio": 0.9
   }
 }

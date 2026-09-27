@@ -14,6 +14,7 @@
 #include <glim/dynamic_rejection/cluster_extractor.hpp>
 
 #include <algorithm>
+#include <Eigen/Eigenvalues>
 #include <memory>
 #include <cmath>
 #include <limits>
@@ -87,6 +88,10 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     eps_range_k                   = config.param<double>("dynamic_cluster_extractor", "eps_range_k",                   0.0);
     frag_merge_gap                = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap",                0.5);
     frag_merge_gap_k              = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap_k",              0.02);
+    use_obb                       = config.param<bool>  ("dynamic_cluster_extractor", "use_obb",                       false);
+    obb_min_points                = config.param<int>   ("dynamic_cluster_extractor", "obb_min_points",                8);
+    obb_min_elongation            = config.param<double>("dynamic_cluster_extractor", "obb_min_elongation",            2.0);
+    obb_max_area_ratio            = config.param<double>("dynamic_cluster_extractor", "obb_max_area_ratio",            0.9);
     track_evidence_decay          = config.param<double>("dynamic_cluster_extractor", "track_evidence_decay",          0.8);
     track_evidence_bias           = config.param<double>("dynamic_cluster_extractor", "track_evidence_bias",           0.1);
     track_evidence_on             = config.param<double>("dynamic_cluster_extractor", "track_evidence_on",             -1.0);
@@ -499,6 +504,23 @@ bool DynamicClusterExtractor::createAABB(
     out_bbox = BoundingBox(size, center, Eigen::Matrix3d::Identity());
     Eigen::Vector3d mean = Eigen::Vector3d::Zero();
     for (const auto& p : cluster) mean += p.head<3>();
+    if (params_.use_obb && static_cast<int>(cluster.size()) >= params_.obb_min_points) {
+        // Yaw-only OBB from the XY principal axis; elongated clusters only (round ones stay axis-aligned).
+        const Eigen::Vector2d m2 = mean.head<2>() / static_cast<double>(cluster.size());
+        Eigen::Matrix2d cov = Eigen::Matrix2d::Zero();
+        for (const auto& p : cluster) { const Eigen::Vector2d d = p.head<2>() - m2; cov += d * d.transpose(); }
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> es(cov);
+        if (es.info() == Eigen::Success && es.eigenvalues()(1) > params_.obb_min_elongation * std::max(es.eigenvalues()(0), 1e-9)) {
+            const Eigen::Vector2d ax = es.eigenvectors().col(1);
+            const double yaw = std::atan2(ax.y(), ax.x());
+            const Eigen::Matrix3d R = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+            Eigen::Vector3d lo = Eigen::Vector3d::Constant(std::numeric_limits<double>::max()), hi = -lo;
+            for (const auto& p : cluster) { const Eigen::Vector3d q = R.transpose() * p.head<3>(); lo = lo.cwiseMin(q); hi = hi.cwiseMax(q); }
+            const Eigen::Vector3d s_obb = hi - lo;
+            if (s_obb.x() * s_obb.y() < params_.obb_max_area_ratio * size.x() * size.y())
+                out_bbox = BoundingBox(s_obb, R * (0.5 * (lo + hi)), R);
+        }
+    }
     if (!cluster.empty()) out_bbox.set_centroid(mean / static_cast<double>(cluster.size()));
     return true;
 }
@@ -561,7 +583,7 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_nearby_clusters(
                     const int ti = w[i].get_track_id(), tj = w[j].get_track_id();
                     if (ti != -1 && tj != -1 && ti != tj) continue;
                     const Eigen::Vector3d gap = ((w[i].get_center() - w[j].get_center()).cwiseAbs()
-                                                 - 0.5 * (w[i].get_size() + w[j].get_size())).cwiseMax(0.0);
+                                                 - (w[i].aabb_half_extent() + w[j].aabb_half_extent())).cwiseMax(0.0);
                     const double r = 0.5 * (w[i].get_center() + w[j].get_center()).head<2>().norm();
                     if (gap.norm() > params_.frag_merge_gap + params_.frag_merge_gap_k * r) continue;
                     BoundingBox u = compute_union_bbox(w[i], w[j]);
