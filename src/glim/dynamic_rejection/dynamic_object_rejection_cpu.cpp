@@ -96,6 +96,14 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     point_ground_cut_k             = config.param<double>(k, "point_ground_cut_k",             0.0);
     point_ground_cut_min_range     = config.param<double>(k, "point_ground_cut_min_range",     0.0);
     fs_enabled                     = config.param<bool>  (k, "fs_enabled",                     false);
+    pe_mode                        = config.param<int>   (k, "pe_mode",                        0);
+    pe_min_points                  = config.param<int>   (k, "pe_min_points",                  2);
+    pe_max_range                   = config.param<double>(k, "pe_max_range",                   20.0);
+    split_enable                   = config.param<bool>  (k, "split_enable",                   false);
+    split_radius                   = config.param<double>(k, "split_radius",                   0.5);
+    split_min_dyn                  = config.param<int>   (k, "split_min_dyn",                  2);
+    split_ratio                    = config.param<double>(k, "split_ratio",                    0.6);
+    split_min_vis                  = config.param<double>(k, "split_min_vis",                  0.2);
     fs_res                         = config.param<double>(k, "fs_res",                         0.3);
     fs_min_free                    = config.param<int>   (k, "fs_min_free",                    3);
     fs_free_ratio                  = config.param<double>(k, "fs_free_ratio",                  3.0);
@@ -255,6 +263,7 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     else {
         point_dyn_.clear();
         if (params_.point_ground_cut > 0.0) split_ground_points(*wf_result.voxelmap);
+        if (params_.pe_mode > 0) point_evidence_labels(*wf_result.voxelmap);
     }
 
     // -----------------------------------------------------------------------
@@ -762,12 +771,15 @@ void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU&
     const int nvox = nvox_of(voxelmap);
     if (static_cast<int>(vis_frac_.size()) != nvox) vis_frac_.assign(nvox, 0.f);
     const double res = params_.fs_res, inv = 1.0 / res, r2max = params_.fs_max_range * params_.fs_max_range;
+    fs_pt_.assign(nvox, {});
     parallel_for_voxels(nvox, params_.num_threads, [&](int j) {
         const auto& v = voxelmap.lookup_voxel(j);
         if (v.is_wall || v.is_ground || v.is_outlier || v.voxel_points.empty()) return;
         if (v.mean.head<2>().squaredNorm() > r2max) return;
         int hits = 0;
-        for (const auto& p : v.voxel_points) {
+        auto& fp = fs_pt_[j]; fp.assign(v.voxel_points.size(), 0);
+        for (size_t pk = 0; pk < v.voxel_points.size(); ++pk) {
+            const auto& p = v.voxel_points[pk];
             const Eigen::Vector3d w = T * p.head<3>();
             auto it = fs_map_.find(fs_key(w, inv));
             if (it == fs_map_.end()) continue;
@@ -776,7 +788,7 @@ void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU&
             // Known free (enough free observations, rarely occupied) ...
             if (fr < params_.fs_min_free || fr < params_.fs_free_ratio * oc) continue;
             // ... and a void neighbourhood (DUFOMap-style dilation).
-            if (params_.fs_flag_nb) { if (c.near == 0) ++hits; continue; }
+            if (params_.fs_flag_nb) { if (c.near == 0) { ++hits; fp[pk] = 1; } continue; }
             bool void_nb = true;
             for (int dx = -params_.fs_dilate; dx <= params_.fs_dilate && void_nb; ++dx)
                 for (int dy = -params_.fs_dilate; dy <= params_.fs_dilate && void_nb; ++dy)
@@ -786,7 +798,7 @@ void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU&
                         if (jt != fs_map_.end() &&
                             fs_decayed(jt->second.occ, jt->second.last_occ) * params_.fs_free_ratio > fs_decayed(jt->second.free, jt->second.last_free)) { void_nb = false; break; }
                     }
-            if (void_nb) ++hits;
+            if (void_nb) { ++hits; fp[pk] = 1; }
         }
         vis_frac_[j] = std::max(vis_frac_[j], static_cast<float>(hits) / v.voxel_points.size());
     });
@@ -973,6 +985,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     std::vector<int> dynamic_count(n_clusters, 0);
     std::vector<int> total_count  (n_clusters, 0);
     std::vector<double> vis_sum   (n_clusters, 0.0);
+    std::vector<std::vector<int>> members(params_.split_enable ? n_clusters : 0);
 
     // Dynamic-wins multi-cluster assignment: a voxel contributes to ALL base bboxes containing it.
     for (int j = 0; j < nvox; ++j) {
@@ -981,6 +994,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             if (!in_base) continue;
             ++total_count[c];
             if (dyn) ++dynamic_count[c];
+            if (params_.split_enable) members[c].push_back(j);
             if (!vis_frac_.empty()) vis_sum[c] += vis_frac_[j];
         }
     }
@@ -1040,6 +1054,32 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     confirmed_bboxes_.clear();
     for (int c = 0; c < n_clusters; ++c) if (was_dynamic[c]) confirmed_bboxes_.push_back(cluster_bboxes[c]);
 
+    // Motion core of fused clusters: a static cluster whose dynamic voxels are diluted by static
+    // structure is tested again on the voxels near its dynamic ones only.
+    motion_core_.assign(params_.split_enable ? nvox : 0, 0);
+    if (params_.split_enable) {
+        const double r2 = params_.split_radius * params_.split_radius;
+        for (int c = 0; c < n_clusters; ++c) {
+            if (was_dynamic[c] || cluster_bboxes[c].is_dynamic_bbox() || dynamic_count[c] < params_.split_min_dyn) continue;
+            std::vector<Eigen::Vector2d> dp;
+            for (int j : members[c]) if (voxelmap.lookup_voxel(j).is_dynamic) dp.push_back(voxelmap.lookup_voxel(j).mean.head<2>());
+            std::vector<int> core; int nd = 0; double vs = 0.0; double zmin = 1e9, zmax = -1e9;
+            for (int j : members[c]) {
+                const auto& v = voxelmap.lookup_voxel(j);
+                bool near = v.is_dynamic;
+                for (size_t q = 0; q < dp.size() && !near; ++q) near = (v.mean.head<2>() - dp[q]).squaredNorm() <= r2;
+                if (!near) continue;
+                core.push_back(j); if (v.is_dynamic) ++nd;
+                if (!vis_frac_.empty()) vs += vis_frac_[j];
+                zmin = std::min(zmin, v.mean.z()); zmax = std::max(zmax, v.mean.z());
+            }
+            if (core.empty()) continue;
+            const double rc = static_cast<double>(nd) / core.size(), vc = vs / core.size();
+            if (rc > params_.split_ratio && vc >= params_.split_min_vis && zmax - zmin + voxelmap.voxel_resolution() >= params_.min_obj_height)
+                for (int j : core) motion_core_[j] = 1;
+        }
+    }
+
     // Final voxel assignment.
     const auto assign = [&](bool strict) {
         parallel_for_voxels(nvox, params_.num_threads, [&](int j) {
@@ -1070,6 +1110,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
                 if (in_base) in_dyn_base = true; else in_dyn_inflated = true;
             }
             if (in_dyn_base) { v.is_dynamic = true; return; }
+            if (!motion_core_.empty() && motion_core_[j] && !near_ground) { v.is_dynamic = true; return; }
             if (strict || near_ground) { v.is_dynamic = false; return; }   // anomalous frame / ground band: confirmed objects only
             const bool need = params_.inflated_requires_evidence;
             if (in_dyn_inflated) { v.is_dynamic = !need || own; return; }
@@ -1102,6 +1143,36 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         spdlog::debug("[dynamic_rejection] anomalous frame: {:.1f}% dynamic -> confirmed objects only", 100.0 * dyn_pts / all_pts);
         for (int j = 0; j < nvox; ++j) voxelmap.lookup_voxel(j).is_dynamic = pre[j];
         assign(true);
+    }
+}
+
+
+// ===========================================================================
+// point_evidence_labels()
+// ===========================================================================
+// Cluster-free labelling: points of a non-dynamic voxel with strong free-space evidence
+// (past range images AND the free-space map, or the map only) become dynamic, so objects
+// fused with static structure or without a cluster are still removed.
+
+void DynamicObjectRejectionCPU::point_evidence_labels(const gtsam_points::DynamicVoxelMapCPU& voxelmap)
+{
+    const int nvox = nvox_of(voxelmap);
+    if (static_cast<int>(fs_pt_.size()) != nvox) return;
+    if (static_cast<int>(point_dyn_.size()) != nvox) point_dyn_.assign(nvox, {});
+    const double r2max = params_.pe_max_range * params_.pe_max_range;
+    for (int j = 0; j < nvox; ++j) {
+        const auto& v = voxelmap.lookup_voxel(j);
+        if (v.is_dynamic || v.is_wall || v.is_ground || v.is_outlier || fs_pt_[j].empty()) continue;
+        if (v.mean.head<2>().squaredNorm() > r2max) continue;
+        if (!hag_.empty() && hag_[j] < params_.ground_band_m) continue;
+        const bool has_vis = static_cast<int>(vis_pt_.size()) == nvox && vis_pt_[j].size() == v.voxel_points.size();
+        std::vector<uint8_t> lab(v.voxel_points.size(), 0);
+        int n = 0;
+        for (size_t k = 0; k < v.voxel_points.size(); ++k) {
+            const bool strong = params_.pe_mode == 2 ? fs_pt_[j][k] != 0 : (fs_pt_[j][k] != 0 && has_vis && vis_pt_[j][k] == 1);
+            if (strong) { lab[k] = 1; ++n; }
+        }
+        if (n >= params_.pe_min_points) point_dyn_[j] = std::move(lab);
     }
 }
 

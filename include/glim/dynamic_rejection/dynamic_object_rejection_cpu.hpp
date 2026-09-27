@@ -68,6 +68,14 @@ public:
     double foot_min_hag;
     // Point-level refinement (final step)
     double point_ground_cut;              ///< Points of dynamic voxels lower than this above the local ground stay static (<= 0 = off).
+    int    pe_mode;                       ///< Cluster-free point labels: 0 off, 1 range-image AND map free space, 2 map only.
+    int    pe_min_points;                 ///< Min strong points in a voxel to relabel it.
+    double pe_max_range;                  ///< Only within this range [m].
+    bool   split_enable;                  ///< Motion core of static clusters (fused objects).
+    double split_radius;                  ///< Voxels within this XY distance of a dynamic voxel form the core [m].
+    int    split_min_dyn;                 ///< Min dynamic voxels in the cluster.
+    double split_ratio;                   ///< Core dynamic ratio needed.
+    double split_min_vis;                 ///< Core mean free-space fraction needed.
     bool   fs_enabled;                    ///< Use the world-frame free-space map as extra visibility evidence.
     double fs_res;                        ///< Cell size [m].
     int    fs_min_free;                   ///< A cell is "known free" after this many free frames ...
@@ -325,6 +333,9 @@ private:
     void fs_query(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
     void fs_integrate(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
     std::vector<float> hag_;
+    std::vector<std::vector<uint8_t>> fs_pt_;     ///< Per voxel, per point: 1 if the free-space map says the point fills known free space.
+    std::vector<char> motion_core_;               ///< Per voxel: part of the motion core of a (fused) static cluster.
+    void point_evidence_labels(const gtsam_points::DynamicVoxelMapCPU& voxelmap);
     std::vector<std::vector<uint8_t>> vis_pt_;     ///< Per voxel, per point: 0 unknown, 1 appeared in free space, 2 consistent with the past.
     std::vector<std::vector<uint8_t>> point_dyn_;  ///< Per voxel, per point final label (empty = use voxel label).
     std::vector<BoundingBox> confirmed_bboxes_;    ///< Confirmed-dynamic bboxes of this frame.
