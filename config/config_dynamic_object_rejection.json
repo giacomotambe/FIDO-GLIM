@@ -67,6 +67,7 @@
     "foot_min_hag": -1.0,
     "point_ground_cut": 0.2,
     "point_ground_cut_k": 0.0,
+    "point_ground_cut_min_range": 10.0,
     "point_refine_enabled": false,
     "point_grow_radius0": 0.2,
     "point_grow_radius_k": 0.02,

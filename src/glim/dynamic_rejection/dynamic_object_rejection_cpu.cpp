@@ -94,6 +94,7 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     point_refine_enabled           = config.param<bool>  (k, "point_refine_enabled",           false);
     point_ground_cut               = config.param<double>(k, "point_ground_cut",               -1.0);
     point_ground_cut_k             = config.param<double>(k, "point_ground_cut_k",             0.0);
+    point_ground_cut_min_range     = config.param<double>(k, "point_ground_cut_min_range",     0.0);
     point_grow_radius0             = config.param<double>(k, "point_grow_radius0",             0.2);
     point_grow_radius_k            = config.param<double>(k, "point_grow_radius_k",            0.02);
     point_grow_radius_max          = config.param<double>(k, "point_grow_radius_max",          0.5);
@@ -848,6 +849,13 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         // Strong-motion evidence is computed for locked clusters too, so the tracker
         // can release a PERMANENT_STATIC track that starts moving.
         cluster_bboxes[c].set_strong_motion(ratio > unlock_threshold);
+        {
+            const double vm = vis_sum[c] / total_count[c];
+            const double sp = std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed());
+            const bool tall_c = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
+            cluster_bboxes[c].set_frame_evidence(tall_c ? ratio + vm : 0.0,
+                                                 dynamic_count[c] == 0 && vm <= 0.0 && sp < params_.min_obj_speed);
+        }
 
         if (cluster_bboxes[c].is_locked()) {
             spdlog::debug("[dynamic_rejection] cluster {} LOCKED -> {} (ratio {:.1f}%, strong={})",
@@ -958,6 +966,7 @@ void DynamicObjectRejectionCPU::split_ground_points(const gtsam_points::DynamicV
         const auto& v = voxelmap.lookup_voxel(j);
         const double cut = params_.point_ground_cut + params_.point_ground_cut_k * v.mean.head<2>().norm();
         if (!v.is_dynamic || !(hag_[j] < reach0 + cut - params_.point_ground_cut)) continue;
+        if (v.mean.head<2>().norm() < params_.point_ground_cut_min_range) continue;   // close range: keep feet
         const double g = v.mean.z() - hag_[j];
         bool any_low = false;
         for (const auto& p : v.voxel_points) if (p.z() - g < cut) { any_low = true; break; }

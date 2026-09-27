@@ -87,6 +87,11 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     eps_range_k                   = config.param<double>("dynamic_cluster_extractor", "eps_range_k",                   0.0);
     frag_merge_gap                = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap",                0.5);
     frag_merge_gap_k              = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap_k",              0.02);
+    track_evidence_decay          = config.param<double>("dynamic_cluster_extractor", "track_evidence_decay",          0.8);
+    track_evidence_bias           = config.param<double>("dynamic_cluster_extractor", "track_evidence_bias",           0.1);
+    track_evidence_on             = config.param<double>("dynamic_cluster_extractor", "track_evidence_on",             -1.0);
+    track_evidence_max            = config.param<double>("dynamic_cluster_extractor", "track_evidence_max",            2.0);
+    confirmed_hold_frames         = config.param<int>   ("dynamic_cluster_extractor", "confirmed_hold_frames",         0);
     frag_max_len                  = config.param<double>("dynamic_cluster_extractor", "frag_max_len",                  6.0);
     frag_max_wid                  = config.param<double>("dynamic_cluster_extractor", "frag_max_wid",                  3.0);
     frag_max_hgt                  = config.param<double>("dynamic_cluster_extractor", "frag_max_hgt",                  4.0);
@@ -674,6 +679,12 @@ static std::vector<int> hungarian(const std::vector<std::vector<double>>& cost, 
     return out;
 }
 
+bool DynamicClusterExtractor::is_confirmed(const Track& t) const {
+    if (t.dynamic_frames >= required_dynamic_frames(t)) return true;
+    if (params_.track_evidence_on > 0.0 && t.evidence >= params_.track_evidence_on) return true;
+    return t.hold > 0;
+}
+
 int DynamicClusterExtractor::required_dynamic_frames(const Track& t) const {
     if (params_.fast_track_speed > 0.0 &&
         std::hypot(t.velocity.x(), t.velocity.y()) > params_.fast_track_speed)
@@ -735,7 +746,7 @@ void DynamicClusterExtractor::label_bboxes_from_tracks(
             } else if (t.permanent_state == PermanentState::DYNAMIC) {
                 is_dyn = true;
             } else {
-                is_dyn = (t.dynamic_frames >= required_dynamic_frames(t));
+                is_dyn = is_confirmed(t);
             }
         }
         bbox.set_dynamic(is_dyn);
@@ -878,7 +889,7 @@ void DynamicClusterExtractor::update_tracks(
             bboxes[p.b_idx].set_dynamic(false);
             bboxes[p.b_idx].set_locked(true);
         } else {
-            bboxes[p.b_idx].set_dynamic(t.dynamic_frames >= required_dynamic_frames(t));
+            bboxes[p.b_idx].set_dynamic(is_confirmed(t));
             bboxes[p.b_idx].set_locked(false);
         }
         t.last_bbox     = bboxes[p.b_idx];
@@ -970,11 +981,26 @@ void DynamicClusterExtractor::update_dynamic_feedback(
         // Find the matching post-rejection bbox by track_id.
         bool is_dynamic_this_frame = false;
         bool found = false;
+        double frame_ev = -1.0; bool contrary = false;
         for (const auto& bbox : post_rejection_bboxes) {
             if (bbox.get_track_id() != track.id) continue;
             is_dynamic_this_frame = bbox.is_dynamic_bbox();
+            frame_ev = bbox.get_frame_evidence(); contrary = bbox.is_contrary();
             found = true;
             break;
+        }
+        // Track-level evidence (leaky accumulator) and hold of the confirmed state.
+        if (found && frame_ev >= 0.0)
+            track.evidence = std::min(params_.track_evidence_max,
+                std::max(-params_.track_evidence_max, params_.track_evidence_decay * track.evidence + frame_ev - params_.track_evidence_bias));
+        else if (!found)
+            track.evidence *= params_.track_evidence_decay;
+        if (params_.confirmed_hold_frames > 0) {
+            const bool strong = track.dynamic_frames + (is_dynamic_this_frame ? 1 : 0) >= required_dynamic_frames(track) ||
+                                (params_.track_evidence_on > 0.0 && track.evidence >= params_.track_evidence_on);
+            if (found && is_dynamic_this_frame && strong) track.hold = params_.confirmed_hold_frames;
+            else if (found && contrary)                   track.hold = 0;
+            else if (track.hold > 0)                      --track.hold;
         }
 
         // Missed frame (occluded / merged cluster): reset both counters.
@@ -1029,10 +1055,10 @@ std::vector<BoundingBox> DynamicClusterExtractor::get_dynamic_track_history() co
     std::vector<BoundingBox> result;
     for (const auto& t : tracks_) {
         if (t.bbox_history.empty()) continue;
-        const bool is_confirmed =
+        const bool confirmed =
             (t.permanent_state == PermanentState::DYNAMIC) ||
-            (t.permanent_state == PermanentState::NONE && t.dynamic_frames >= required_dynamic_frames(t));
-        if (!is_confirmed) continue;
+            (t.permanent_state == PermanentState::NONE && is_confirmed(t));
+        if (!confirmed) continue;
         for (const auto& hbbox : t.bbox_history)
             result.push_back(hbbox);
     }

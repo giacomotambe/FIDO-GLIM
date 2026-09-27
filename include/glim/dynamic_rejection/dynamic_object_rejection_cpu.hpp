@@ -68,6 +68,7 @@ public:
     double foot_min_hag;
     // Point-level refinement (final step)
     double point_ground_cut;              ///< Points of dynamic voxels lower than this above the local ground stay static (<= 0 = off).
+    double point_ground_cut_min_range;    ///< The ground cut applies only beyond this range [m].
     double point_ground_cut_k;            ///< Range slope of the cut: cut(r) = point_ground_cut + k * r.
     bool   point_refine_enabled;          ///< Label individual points: grow from dynamic seeds, veto points with static free-space evidence.
     double point_grow_radius0;            ///< Growth radius at range 0 [m].

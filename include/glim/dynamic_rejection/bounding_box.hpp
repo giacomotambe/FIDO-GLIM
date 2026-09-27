@@ -74,6 +74,12 @@ public:
     bool has_strong_motion() const { return strong_motion_; }
     void set_strong_motion(bool v)  { strong_motion_ = v; }
 
+    /// Per-frame motion evidence of the cluster (dynamic-voxel ratio + free-space fraction), -1 = not computed,
+    /// and whether this frame explicitly contradicts motion (no dynamic voxel, no free space, not moving).
+    double get_frame_evidence() const { return frame_evidence_; }
+    bool   is_contrary()        const { return contrary_; }
+    void   set_frame_evidence(double e, bool contrary) { frame_evidence_ = e; contrary_ = contrary; }
+
     int  get_track_id() const { return track_id; }
     void set_track_id(int id)  { track_id = id; }
 
@@ -102,6 +108,8 @@ private:
     bool has_centroid_ = false;
     double window_speed_ = 0.0;
     std::vector<BoundingBox> parts_;
+    double frame_evidence_ = -1.0;
+    bool   contrary_ = false;
     int  track_id;  ///< -1 = untracked / phantom
     // Precomputed for contains()
     Eigen::Matrix3d R_inv;

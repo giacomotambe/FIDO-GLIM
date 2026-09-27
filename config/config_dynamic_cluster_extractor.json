@@ -48,6 +48,11 @@
     "frag_merge_gap_k": 0.02,
     "frag_max_len": 6.0,
     "frag_max_wid": 3.0,
-    "frag_max_hgt": 4.0
+    "frag_max_hgt": 4.0,
+    "track_evidence_decay": 0.8,
+    "track_evidence_bias": 0.6,
+    "track_evidence_on": 0.5,
+    "track_evidence_max": 2.0,
+    "confirmed_hold_frames": 0
   }
 }

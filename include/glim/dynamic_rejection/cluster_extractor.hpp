@@ -29,7 +29,9 @@ struct Track {
     int             dynamic_frames = 0;   ///< Consecutive frames confirmed dynamic by propagate_to_clusters()
     int             static_frames  = 0;   ///< Consecutive frames confirmed static by propagate_to_clusters()
     PermanentState  permanent_state = PermanentState::NONE;
-    int             unlock_frames  = 0;   ///< Consecutive strong-motion frames while PERMANENT_STATIC
+    int             unlock_frames  = 0;
+    double          evidence = 0.0;       ///< Accumulated motion evidence (leaky sum of frame evidence - bias)
+    int             hold = 0;             ///< Frames the confirmed-dynamic state is still held without new evidence   ///< Consecutive strong-motion frames while PERMANENT_STATIC
     Eigen::Vector3d velocity = Eigen::Vector3d::Zero();  ///< EMA-smoothed velocity [m/s] in current sensor frame
     std::deque<BoundingBox> bbox_history;  ///< Recent past bboxes in current sensor frame (oldest front, newest back)
 };
@@ -92,6 +94,13 @@ public:
     double eps_range_k;               ///< eps(r) = max(eps, eps_range_k * r): sparse far objects stay connected (0 = off).
     double frag_merge_gap;            ///< Merge bboxes whose AABB gap <= frag_merge_gap + frag_merge_gap_k * r (< 0 = off).
     double frag_merge_gap_k;
+    /// Track-level evidence accumulation: e <- decay*e + (frame_evidence - bias), confirmed when e >= on (on <= 0 = off).
+    double track_evidence_decay;
+    double track_evidence_bias;
+    double track_evidence_on;
+    double track_evidence_max;
+    /// Frames a confirmed-dynamic track stays dynamic without evidence (reset by contrary evidence; 0 = off).
+    int    confirmed_hold_frames;
     double frag_max_len, frag_max_wid, frag_max_hgt;  ///< A merged bbox must stay within these sorted dimensions [m].       ///< XY cell size of the local ground estimate used by cluster_max_height.     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
     int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
 };
@@ -139,6 +148,7 @@ private:
     void label_bboxes_from_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current, double dt) const;
     /// Consecutive confirmed-dynamic frames required before the track is flagged dynamic.
     int  required_dynamic_frames(const Track& t) const;
+    bool is_confirmed(const Track& t) const;
     /// Track bbox moved to the current frame and shifted by velocity * dt (constant-velocity prediction).
     BoundingBox predicted_bbox(const Track& t, const Eigen::Isometry3d& T_to_current, double dt) const;
 
