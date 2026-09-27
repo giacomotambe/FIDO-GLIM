@@ -97,6 +97,10 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     track_evidence_on             = config.param<double>("dynamic_cluster_extractor", "track_evidence_on",             -1.0);
     track_evidence_max            = config.param<double>("dynamic_cluster_extractor", "track_evidence_max",            2.0);
     confirmed_hold_frames         = config.param<int>   ("dynamic_cluster_extractor", "confirmed_hold_frames",         0);
+    inherit_gate                  = config.param<double>("dynamic_cluster_extractor", "inherit_gate",                  -1.0);
+    inherit_gate_per_range        = config.param<double>("dynamic_cluster_extractor", "inherit_gate_per_range",        0.05);
+    coast_label                   = config.param<bool>  ("dynamic_cluster_extractor", "coast_label",                   false);
+    assoc_size_weight             = config.param<double>("dynamic_cluster_extractor", "assoc_size_weight",             0.0);
     frag_max_len                  = config.param<double>("dynamic_cluster_extractor", "frag_max_len",                  6.0);
     frag_max_wid                  = config.param<double>("dynamic_cluster_extractor", "frag_max_wid",                  3.0);
     frag_max_hgt                  = config.param<double>("dynamic_cluster_extractor", "frag_max_hgt",                  4.0);
@@ -825,7 +829,7 @@ void DynamicClusterExtractor::update_tracks(
                     + params_.assoc_gate_per_range * bboxes[b].get_centroid().head<2>().norm()
                     + params_.assoc_gate_per_missed * tracks_[t].missed_frames;
                 const double d = (predicted[t].get_centroid() - bboxes[b].get_centroid()).norm();
-                if (d <= gate) cost[t][b] = d;
+                if (d <= gate) cost[t][b] = d + params_.assoc_size_weight * (predicted[t].get_size() - bboxes[b].get_size()).norm();
             }
         // Solve independently on each connected component of the gating graph
         // (identical optimum, but O(sum k^3) instead of O(n^3) with ~hundreds of clusters outdoors).
@@ -924,9 +928,26 @@ void DynamicClusterExtractor::update_tracks(
                       t.center.x(), t.center.y(), t.center.z());
     }
 
+    // Confirmed-dynamic tracks left unmatched this frame (candidates for state inheritance).
+    std::vector<int> orphan;
+    if (params_.inherit_gate > 0.0)
+        for (int t = 0; t < N_tracks; ++t)
+            if (!track_matched[t] && (tracks_[t].permanent_state == PermanentState::DYNAMIC ||
+                                      (tracks_[t].permanent_state == PermanentState::NONE && is_confirmed(tracks_[t]))))
+                orphan.push_back(t);
+
     // Unmatched bboxes → new tracks.
     for (int b = 0; b < N_bboxes; ++b) {
         if (bbox_matched[b]) continue;
+        // ID switch: a new cluster close to the prediction of a confirmed track that lost its match
+        // inherits that track's dynamic state instead of restarting from static.
+        int heir = -1; double hd = std::numeric_limits<double>::max();
+        for (int oi : orphan) {
+            if (oi < 0) continue;
+            const double gate = params_.inherit_gate + params_.inherit_gate_per_range * bboxes[b].get_centroid().head<2>().norm();
+            const double d = (predicted[oi].get_centroid() - bboxes[b].get_centroid()).norm();
+            if (d <= gate && d < hd) { hd = d; heir = oi; }
+        }
         Track t;
         t.id            = next_track_id_++;
         t.center        = params_.use_centroid_association ? bboxes[b].get_centroid() : bboxes[b].get_center();
@@ -934,8 +955,16 @@ void DynamicClusterExtractor::update_tracks(
         t.age           = 1;
         t.missed_frames = 0;
         tracks_.push_back(t);
+        if (heir >= 0) {
+            const Track o = tracks_[heir];
+            Track& nt = tracks_.back();
+            nt.dynamic_frames = std::max(o.dynamic_frames, required_dynamic_frames(o));
+            nt.evidence = o.evidence; nt.velocity = o.velocity; nt.bbox_history = o.bbox_history;
+            for (int& oi : orphan) if (oi == heir) oi = -1;
+            tracks_[heir].missed_frames = params_.track_max_missed;   // the heir replaces it
+        }
         bboxes[b].set_track_id(t.id);
-        bboxes[b].set_dynamic(false);  // New tracks start static (hysteresis).
+        bboxes[b].set_dynamic(heir >= 0);  // New tracks start static (hysteresis) unless they inherit.
         spdlog::debug("[tracker] new track={} at ({:.2f},{:.2f},{:.2f})",
                       t.id, t.center.x(), t.center.y(), t.center.z());
     }
@@ -1083,6 +1112,9 @@ std::vector<BoundingBox> DynamicClusterExtractor::get_dynamic_track_history() co
         if (!confirmed) continue;
         for (const auto& hbbox : t.bbox_history)
             result.push_back(hbbox);
+        // Coasting confirmed track (no cluster this frame): its predicted box also labels
+        // points that carry their own motion evidence.
+        if (params_.coast_label && t.missed_frames > 0) result.push_back(t.last_bbox);
     }
     spdlog::debug("[cluster_extractor] get_dynamic_track_history: {} historical bboxes", result.size());
     return result;

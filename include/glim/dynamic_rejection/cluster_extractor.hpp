@@ -107,6 +107,14 @@ public:
     double track_evidence_max;
     /// Frames a confirmed-dynamic track stays dynamic without evidence (reset by contrary evidence; 0 = off).
     int    confirmed_hold_frames;
+    /// A new track born within inherit_gate + k*r of the prediction of an unmatched confirmed track
+    /// inherits its dynamic state (<= 0 = off).
+    double inherit_gate;
+    double inherit_gate_per_range;
+    /// Predicted boxes of coasting confirmed tracks are used as historical boxes for labelling.
+    bool   coast_label;
+    /// Association cost = centroid distance + w * |size difference| (0 = distance only).
+    double assoc_size_weight;
     double frag_max_len, frag_max_wid, frag_max_hgt;  ///< A merged bbox must stay within these sorted dimensions [m].       ///< XY cell size of the local ground estimate used by cluster_max_height.     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
     int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
 };

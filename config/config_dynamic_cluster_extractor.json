@@ -57,6 +57,10 @@
     "use_obb": false,
     "obb_min_points": 8,
     "obb_min_elongation": 2.0,
-    "obb_max_area_ratio": 0.9
+    "obb_max_area_ratio": 0.9,
+    "inherit_gate": -1.0,
+    "inherit_gate_per_range": 0.05,
+    "coast_label": false,
+    "assoc_size_weight": 0.0
   }
 }
