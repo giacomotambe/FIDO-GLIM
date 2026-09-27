@@ -92,6 +92,8 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     fast_confirm_min_vis           = config.param<double>(k, "fast_confirm_min_vis",           0.2);
     moving_vis_alt                 = config.param<double>(k, "moving_vis_alt",                 0.3);
     point_refine_enabled           = config.param<bool>  (k, "point_refine_enabled",           false);
+    point_ground_cut               = config.param<double>(k, "point_ground_cut",               -1.0);
+    point_ground_cut_k             = config.param<double>(k, "point_ground_cut_k",             0.0);
     point_grow_radius0             = config.param<double>(k, "point_grow_radius0",             0.2);
     point_grow_radius_k            = config.param<double>(k, "point_grow_radius_k",            0.02);
     point_grow_radius_max          = config.param<double>(k, "point_grow_radius_max",          0.5);
@@ -234,7 +236,10 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     propagate_to_clusters(*wf_result.voxelmap, cluster_bboxes, historical_bboxes);
     if (params_.evidence_enabled) apply_world_evidence(*wf_result.voxelmap, cur_pose);
     if (params_.point_refine_enabled) refine_points(*wf_result.voxelmap);
-    else point_dyn_.clear();
+    else {
+        point_dyn_.clear();
+        if (params_.point_ground_cut > 0.0) split_ground_points(*wf_result.voxelmap);
+    }
 
     // -----------------------------------------------------------------------
     // Split voxel points into static / dynamic buckets
@@ -933,6 +938,33 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         spdlog::debug("[dynamic_rejection] anomalous frame: {:.1f}% dynamic -> confirmed objects only", 100.0 * dyn_pts / all_pts);
         for (int j = 0; j < nvox; ++j) voxelmap.lookup_voxel(j).is_dynamic = pre[j];
         assign(true);
+    }
+}
+
+
+// ===========================================================================
+// split_ground_points()
+// ===========================================================================
+// A dynamic voxel close to the ground (feet, wheels) usually also holds ground returns:
+// its points below point_ground_cut above the local ground stay static.
+
+void DynamicObjectRejectionCPU::split_ground_points(const gtsam_points::DynamicVoxelMapCPU& voxelmap)
+{
+    const int nvox = nvox_of(voxelmap);
+    if (static_cast<int>(hag_.size()) != nvox) return;
+    const double reach0 = params_.point_ground_cut + voxelmap.voxel_resolution();
+    point_dyn_.assign(nvox, {});
+    for (int j = 0; j < nvox; ++j) {
+        const auto& v = voxelmap.lookup_voxel(j);
+        const double cut = params_.point_ground_cut + params_.point_ground_cut_k * v.mean.head<2>().norm();
+        if (!v.is_dynamic || !(hag_[j] < reach0 + cut - params_.point_ground_cut)) continue;
+        const double g = v.mean.z() - hag_[j];
+        bool any_low = false;
+        for (const auto& p : v.voxel_points) if (p.z() - g < cut) { any_low = true; break; }
+        if (!any_low) continue;
+        auto& lab = point_dyn_[j];
+        lab.resize(v.voxel_points.size());
+        for (size_t k = 0; k < v.voxel_points.size(); ++k) lab[k] = (v.voxel_points[k].z() - g >= cut) ? 1 : 0;
     }
 }
 

@@ -67,6 +67,8 @@ public:
     double moving_vis_alt;                ///< A cluster passes the speed gate also if its mean free-space fraction >= this (> 1 = off).
     double foot_min_hag;
     // Point-level refinement (final step)
+    double point_ground_cut;              ///< Points of dynamic voxels lower than this above the local ground stay static (<= 0 = off).
+    double point_ground_cut_k;            ///< Range slope of the cut: cut(r) = point_ground_cut + k * r.
     bool   point_refine_enabled;          ///< Label individual points: grow from dynamic seeds, veto points with static free-space evidence.
     double point_grow_radius0;            ///< Growth radius at range 0 [m].
     double point_grow_radius_k;           ///< Growth radius increase per metre of range.
@@ -303,6 +305,7 @@ private:
     std::vector<std::vector<uint8_t>> vis_pt_;     ///< Per voxel, per point: 0 unknown, 1 appeared in free space, 2 consistent with the past.
     std::vector<std::vector<uint8_t>> point_dyn_;  ///< Per voxel, per point final label (empty = use voxel label).
     std::vector<BoundingBox> confirmed_bboxes_;    ///< Confirmed-dynamic bboxes of this frame.
+    void split_ground_points(const gtsam_points::DynamicVoxelMapCPU& voxelmap);
     void refine_points(const gtsam_points::DynamicVoxelMapCPU& voxelmap);              ///< Per-voxel height above local ground [m].
     void compute_ground_heights(const gtsam_points::DynamicVoxelMapCPU& voxelmap);
     std::deque<std::vector<float>> range_img_history_;  ///< Range image of each voxelmap_history_ entry (own frame, 3x3 min).
