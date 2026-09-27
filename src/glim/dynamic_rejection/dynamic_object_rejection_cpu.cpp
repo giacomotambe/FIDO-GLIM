@@ -104,6 +104,10 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     fs_margin                      = config.param<double>(k, "fs_margin",                      0.3);
     fs_margin_rel                  = config.param<double>(k, "fs_margin_rel",                  0.03);
     fs_dilate                      = config.param<int>   (k, "fs_dilate",                      1);
+    fs_occ_static_only             = config.param<bool>  (k, "fs_occ_static_only",             false);
+    fs_decay                       = config.param<double>(k, "fs_decay",                       1.0);
+    fs_flag_nb                     = config.param<bool>  (k, "fs_flag_nb",                     false);
+    fs_dda                         = config.param<bool>  (k, "fs_dda",                         false);
     point_grow_radius0             = config.param<double>(k, "point_grow_radius0",             0.2);
     point_grow_radius_k            = config.param<double>(k, "point_grow_radius_k",            0.02);
     point_grow_radius_max          = config.param<double>(k, "point_grow_radius_max",          0.5);
@@ -739,10 +743,18 @@ void DynamicObjectRejectionCPU::compute_visibility(
 // Free-space map (fs_query / fs_integrate)
 // ===========================================================================
 
-static inline int64_t fs_key(const Eigen::Vector3d& p, double inv) {
-    const int64_t x = static_cast<int64_t>(std::floor(p.x() * inv)), y = static_cast<int64_t>(std::floor(p.y() * inv)),
-                  z = static_cast<int64_t>(std::floor(p.z() * inv));
+static inline int64_t fs_pack(int64_t x, int64_t y, int64_t z) {
     return ((x & 0x1FFFFF) << 42) | ((y & 0x1FFFFF) << 21) | (z & 0x1FFFFF);
+}
+static inline int64_t fs_key(const Eigen::Vector3d& p, double inv) {
+    return fs_pack(static_cast<int64_t>(std::floor(p.x() * inv)), static_cast<int64_t>(std::floor(p.y() * inv)),
+                   static_cast<int64_t>(std::floor(p.z() * inv)));
+}
+
+float DynamicObjectRejectionCPU::fs_decayed(float v, uint32_t last) const {
+    if (params_.fs_decay >= 1.0 || last == 0) return v;
+    const uint32_t k = fs_frame_ - last;
+    return k < fs_pow_.size() ? v * fs_pow_[k] : 0.f;
 }
 
 void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T)
@@ -760,17 +772,19 @@ void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU&
             auto it = fs_map_.find(fs_key(w, inv));
             if (it == fs_map_.end()) continue;
             const auto& c = it->second;
+            const float fr = fs_decayed(c.free, c.last_free), oc = fs_decayed(c.occ, c.last_occ);
             // Known free (enough free observations, rarely occupied) ...
-            if (c.free < params_.fs_min_free || c.free < params_.fs_free_ratio * c.occ) continue;
-            // ... and a void neighbourhood (DUFOMap-style dilation): no neighbour cell was ever
-            // occupied more than a noise level, so thin / jittering structures are not "free".
+            if (fr < params_.fs_min_free || fr < params_.fs_free_ratio * oc) continue;
+            // ... and a void neighbourhood (DUFOMap-style dilation).
+            if (params_.fs_flag_nb) { if (c.near == 0) ++hits; continue; }
             bool void_nb = true;
             for (int dx = -params_.fs_dilate; dx <= params_.fs_dilate && void_nb; ++dx)
                 for (int dy = -params_.fs_dilate; dy <= params_.fs_dilate && void_nb; ++dy)
                     for (int dz = -params_.fs_dilate; dz <= params_.fs_dilate; ++dz) {
                         if (!dx && !dy && !dz) continue;
                         auto jt = fs_map_.find(fs_key(w + res * Eigen::Vector3d(dx, dy, dz), inv));
-                        if (jt != fs_map_.end() && jt->second.occ * params_.fs_free_ratio > jt->second.free) { void_nb = false; break; }
+                        if (jt != fs_map_.end() &&
+                            fs_decayed(jt->second.occ, jt->second.last_occ) * params_.fs_free_ratio > fs_decayed(jt->second.free, jt->second.last_free)) { void_nb = false; break; }
                     }
             if (void_nb) ++hits;
         }
@@ -781,42 +795,85 @@ void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU&
 void DynamicObjectRejectionCPU::fs_integrate(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T)
 {
     ++fs_frame_;
+    if (params_.fs_decay < 1.0 && fs_pow_.empty()) {
+        fs_pow_.resize(2000); double q = 1.0;
+        for (auto& x : fs_pow_) { x = static_cast<float>(q); q *= params_.fs_decay; }
+    }
     const double res = params_.fs_res, inv = 1.0 / res, r2max = params_.fs_max_range * params_.fs_max_range;
     const Eigen::Vector3d o = T.translation();
     const int stride = std::max(1, params_.fs_ray_stride);
     const int nvox = nvox_of(voxelmap);
+    const bool per_point = static_cast<int>(point_dyn_.size()) == nvox;
+    const auto bump = [&](float& v, uint32_t& last) {
+        if (last == fs_frame_) return false;
+        v = fs_decayed(v, last) + 1.f; if (v > 60000.f) v = 60000.f; last = fs_frame_; return true;
+    };
+    const auto mark_free = [&](int64_t k) { auto& cf = fs_map_[k]; bump(cf.free, cf.last_free); };
     int cnt = 0;
     for (int j = 0; j < nvox; ++j) {
         const auto& v = voxelmap.lookup_voxel(j);
-        for (const auto& p : v.voxel_points) {
+        for (size_t pi = 0; pi < v.voxel_points.size(); ++pi) {
             if (++cnt % stride) continue;
+            const auto& p = v.voxel_points[pi];
             const double d2 = p.head<3>().squaredNorm();
             if (d2 > r2max || d2 < 1e-4) continue;
             const Eigen::Vector3d w = T * p.head<3>();
-            auto& ce = fs_map_[fs_key(w, inv)];
-            if (ce.last_occ != fs_frame_) { ce.last_occ = fs_frame_; if (ce.occ < 60000) ++ce.occ; }
+            // Endpoint: occupied (optionally only static points, so moving objects do not
+            // keep their paths "occupied").
+            const bool dyn = per_point && !point_dyn_[j].empty() ? point_dyn_[j][pi] != 0 : v.is_dynamic;
+            if (!(params_.fs_occ_static_only && dyn)) {
+                const int64_t ke = fs_key(w, inv);
+                auto& ce = fs_map_[ke];
+                bump(ce.occ, ce.last_occ);
+                if (!ce.marked) {
+                    ce.marked = true;
+                    if (params_.fs_flag_nb) {
+                        const int64_t x = static_cast<int64_t>(std::floor(w.x() * inv)), y = static_cast<int64_t>(std::floor(w.y() * inv)),
+                                      z = static_cast<int64_t>(std::floor(w.z() * inv));
+                        for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) for (int dz = -1; dz <= 1; ++dz)
+                            if (dx || dy || dz) { auto& cn = fs_map_[fs_pack(x + dx, y + dy, z + dz)]; if (cn.near < 60000) ++cn.near; }
+                    }
+                }
+            }
             const double d = std::sqrt(d2);
             const double L = d - std::max(params_.fs_margin, params_.fs_margin_rel * d);
             if (L <= 0.0) continue;
             const Eigen::Vector3d dir = (w - o) / d;
-            int64_t prev = -1;
-            for (double t = 0.5 * res; t < L; t += 0.5 * res) {
-                const int64_t k = fs_key(o + t * dir, inv);
-                if (k == prev) continue;
-                prev = k;
-                auto& cf = fs_map_[k];
-                if (cf.last_free != fs_frame_) { cf.last_free = fs_frame_; if (cf.free < 60000) ++cf.free; }
+            if (!params_.fs_dda) {
+                int64_t prev = -1;
+                for (double t = 0.5 * res; t < L; t += 0.5 * res) {
+                    const int64_t k = fs_key(o + t * dir, inv);
+                    if (k == prev) continue;
+                    prev = k; mark_free(k);
+                }
+                continue;
+            }
+            // Amanatides-Woo traversal: every crossed cell exactly once.
+            Eigen::Vector3i c((o * inv).array().floor().cast<int>());
+            const Eigen::Vector3i c_end(((o + L * dir) * inv).array().floor().cast<int>());
+            Eigen::Vector3i step; Eigen::Vector3d tmax, tdelta;
+            for (int a = 0; a < 3; ++a) {
+                if (dir[a] > 1e-12)       { step[a] = 1;  tmax[a] = ((c[a] + 1) * res - o[a]) / dir[a]; tdelta[a] = res / dir[a]; }
+                else if (dir[a] < -1e-12) { step[a] = -1; tmax[a] = (c[a] * res - o[a]) / dir[a];       tdelta[a] = -res / dir[a]; }
+                else                      { step[a] = 0;  tmax[a] = std::numeric_limits<double>::infinity(); tdelta[a] = tmax[a]; }
+            }
+            for (int it = 0; it < 4096; ++it) {
+                mark_free(fs_pack(c.x(), c.y(), c.z()));
+                if (c == c_end) break;
+                int a = (tmax.x() < tmax.y()) ? (tmax.x() < tmax.z() ? 0 : 2) : (tmax.y() < tmax.z() ? 1 : 2);
+                if (tmax[a] > L) break;
+                c[a] += step[a]; tmax[a] += tdelta[a];
             }
         }
     }
     // Keep the map local.
     if (fs_frame_ % 20 == 0) {
         const double keep2 = std::pow(params_.fs_max_range + 10.0, 2);
+        auto sx = [](int64_t a) { return (a & 0x100000) ? a - 0x200000 : a; };
         for (auto it = fs_map_.begin(); it != fs_map_.end();) {
             const int64_t k = it->first;
-            auto sx = [](int64_t a) { return (a & 0x100000) ? a - 0x200000 : a; };
-            const Eigen::Vector3d c((sx((k >> 42) & 0x1FFFFF) + 0.5) * res, (sx((k >> 21) & 0x1FFFFF) + 0.5) * res, 0.0);
-            if ((c.head<2>() - o.head<2>()).squaredNorm() > keep2) it = fs_map_.erase(it); else ++it;
+            const Eigen::Vector2d cxy((sx((k >> 42) & 0x1FFFFF) + 0.5) * res, (sx((k >> 21) & 0x1FFFFF) + 0.5) * res);
+            if ((cxy - o.head<2>()).squaredNorm() > keep2) it = fs_map_.erase(it); else ++it;
         }
     }
 }

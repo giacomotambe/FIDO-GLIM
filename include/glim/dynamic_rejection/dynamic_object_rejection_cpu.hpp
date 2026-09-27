@@ -76,7 +76,11 @@ public:
     double fs_max_range;                  ///< Rays / queries only within this range [m].
     double fs_margin;                     ///< Ray stops max(margin, margin_rel * d) before the hit.
     double fs_margin_rel;
-    int    fs_dilate;                     ///< Neighbourhood (cells) that must also be void.                    ///< Free observations must be at least this many frames old.
+    int    fs_dilate;                     ///< Neighbourhood (cells) that must also be void.
+    bool   fs_occ_static_only;            ///< Only points labelled static mark their cell occupied.
+    double fs_decay;                      ///< Per-frame forgetting of free/occ counts (1 = none).
+    bool   fs_flag_nb;                    ///< Neighbour-occupied flag stored per cell (1 lookup per query).
+    bool   fs_dda;                        ///< Exact cell traversal (each crossed cell once).
     double point_ground_cut_min_range;    ///< The ground cut applies only beyond this range [m].
     double point_ground_cut_k;            ///< Range slope of the cut: cut(r) = point_ground_cut + k * r.
     bool   point_refine_enabled;          ///< Label individual points: grow from dynamic seeds, veto points with static free-space evidence.
@@ -313,7 +317,9 @@ private:
     std::vector<float> vis_frac_;
     /// Local free-space map in the world frame (DUFOMap-like): per cell, number of frames in which a
     /// ray crossed it (free) or ended in it (occ). Long memory without keeping the past scans.
-    struct FsCell { uint16_t free = 0, occ = 0; uint32_t last_free = 0, last_occ = 0; };
+    struct FsCell { float free = 0.f, occ = 0.f; uint32_t last_free = 0, last_occ = 0; uint16_t near = 0; bool marked = false; };
+    std::vector<float> fs_pow_;
+    float fs_decayed(float v, uint32_t last) const;
     std::unordered_map<int64_t, FsCell> fs_map_;
     uint32_t fs_frame_ = 0;
     void fs_query(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
