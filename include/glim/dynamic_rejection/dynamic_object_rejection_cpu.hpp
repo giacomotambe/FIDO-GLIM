@@ -68,6 +68,9 @@ public:
     double foot_min_hag;
     // Point-level refinement (final step)
     double point_ground_cut;              ///< Points of dynamic voxels lower than this above the local ground stay static (<= 0 = off).
+    bool   vis_raw;                       ///< Past range images (free-space test) built from the raw scan instead of the voxel points.
+    double vis_raw_max_range;             ///< Raw points beyond this range are ignored [m].
+    bool   fs_raw;                        ///< Free-space map integrated from the raw scan.
     int    pe_mode;                       ///< Cluster-free point labels: 0 off, 1 range-image AND map free space, 2 map only.
     int    pe_min_points;                 ///< Min strong points in a voxel to relabel it.
     double pe_max_range;                  ///< Only within this range [m].
@@ -332,6 +335,8 @@ private:
     uint32_t fs_frame_ = 0;
     void fs_query(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
     void fs_integrate(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
+    void fs_integrate_points(const std::vector<Eigen::Vector4d>& pts, const Eigen::Isometry3d& T_world_sensor);
+    void push_raw_range_image(const PreprocessedFrame::Ptr& frame);
     std::vector<float> hag_;
     std::vector<std::vector<uint8_t>> fs_pt_;     ///< Per voxel, per point: 1 if the free-space map says the point fills known free space.
     std::vector<char> motion_core_;               ///< Per voxel: part of the motion core of a (fused) static cluster.

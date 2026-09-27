@@ -96,6 +96,9 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     point_ground_cut_k             = config.param<double>(k, "point_ground_cut_k",             0.0);
     point_ground_cut_min_range     = config.param<double>(k, "point_ground_cut_min_range",     0.0);
     fs_enabled                     = config.param<bool>  (k, "fs_enabled",                     false);
+    vis_raw                        = config.param<bool>  (k, "vis_raw",                        false);
+    vis_raw_max_range              = config.param<double>(k, "vis_raw_max_range",              40.0);
+    fs_raw                         = config.param<bool>  (k, "fs_raw",                         false);
     pe_mode                        = config.param<int>   (k, "pe_mode",                        0);
     pe_min_points                  = config.param<int>   (k, "pe_min_points",                  2);
     pe_max_range                   = config.param<double>(k, "pe_max_range",                   20.0);
@@ -212,11 +215,12 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     if (voxelmap_history_.empty()) {
         spdlog::debug("[dynamic_rejection] first frame — storing reference voxelmap");
         voxelmap_history_.push_back(wf_result.voxelmap);
+        if (params_.vis_raw && source_frame && source_frame->raw_points && !source_frame->raw_points->points.empty()) push_raw_range_image(source_frame);
         pose_history_.push_back(Eigen::Isometry3d::Identity());  // no predecessor: identity delta
         abs_pose_history_.push_back(lidar_pose());
         last_pose_ = lidar_pose();
         last_dynamic_frame_ = nullptr;
-        if (params_.fs_enabled) fs_integrate(*wf_result.voxelmap, lidar_pose());
+        if (params_.fs_enabled) { if (params_.fs_raw && source_frame && source_frame->raw_points) fs_integrate_points(source_frame->raw_points->points, lidar_pose()); else fs_integrate(*wf_result.voxelmap, lidar_pose()); }
         result.static_frame  = source_frame;
         result.dynamic_frame = nullptr;
         return result;
@@ -280,8 +284,9 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     // -----------------------------------------------------------------------
     // Update history ring (voxelmap_history_ and pose_history_ stay aligned)
     // -----------------------------------------------------------------------
-    if (params_.fs_enabled) fs_integrate(*wf_result.voxelmap, cur_pose);
+    if (params_.fs_enabled) { if (params_.fs_raw && source_frame && source_frame->raw_points) fs_integrate_points(source_frame->raw_points->points, cur_pose); else fs_integrate(*wf_result.voxelmap, cur_pose); }
     voxelmap_history_.push_back(wf_result.voxelmap);
+    if (params_.vis_raw && source_frame && source_frame->raw_points && !source_frame->raw_points->points.empty()) push_raw_range_image(source_frame);
     pose_history_.push_back(T_delta_pose);
     abs_pose_history_.push_back(cur_pose);
     while (static_cast<int>(voxelmap_history_.size()) > params_.frame_num_memory) {
@@ -686,6 +691,42 @@ static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapC
     return out;
 }
 
+static std::vector<float> build_range_image_pts(const std::vector<Eigen::Vector4d>& pts, int rows, int cols, double res, int F, double rmax) {
+    std::vector<float> img(rows * cols, std::numeric_limits<float>::infinity());
+    const double r2 = rmax * rmax;
+    for (const auto& pt : pts) {
+        const Eigen::Vector3d q = pt.head<3>();
+        const double d2 = q.squaredNorm();
+        if (!(d2 > 1e-4) || d2 > r2) continue;
+        const int c = std::min(cols - 1, static_cast<int>((std::atan2(q.y(), q.x()) + M_PI) / res));
+        const int r = std::min(rows - 1, std::max(0, static_cast<int>((std::atan2(q.z(), q.head<2>().norm()) + M_PI / 2.0) / res)));
+        float& cell = img[r * cols + c];
+        cell = std::min(cell, static_cast<float>(std::sqrt(d2)));
+    }
+    std::vector<float> out(rows * cols, std::numeric_limits<float>::infinity());
+    for (int r = 0; r < rows; ++r)
+        for (int c = 0; c < cols; ++c) {
+            float m = std::numeric_limits<float>::infinity();
+            for (int dr = -F; dr <= F; ++dr) {
+                const int rr = r + dr; if (rr < 0 || rr >= rows) continue;
+                for (int dc = -F; dc <= F; ++dc) m = std::min(m, img[rr * cols + (c + dc + cols) % cols]);
+            }
+            out[r * cols + c] = m;
+        }
+    return out;
+}
+
+void DynamicObjectRejectionCPU::push_raw_range_image(const PreprocessedFrame::Ptr& frame) {
+    // Called right after the frame is pushed into voxelmap_history_: the lazy builder in
+    // compute_visibility() then finds its image already there.
+    const double res = params_.visibility_res_deg * M_PI / 180.0;
+    const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res)), rows = static_cast<int>(std::ceil(M_PI / res));
+    while (range_img_history_.size() + 1 < voxelmap_history_.size())
+        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter)));
+    if (range_img_history_.size() + 1 == voxelmap_history_.size())
+        range_img_history_.push_back(build_range_image_pts(frame->raw_points->points, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range));
+}
+
 void DynamicObjectRejectionCPU::compute_visibility(
     const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor)
 {
@@ -802,6 +843,49 @@ void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU&
         }
         vis_frac_[j] = std::max(vis_frac_[j], static_cast<float>(hits) / v.voxel_points.size());
     });
+}
+
+void DynamicObjectRejectionCPU::fs_integrate_points(const std::vector<Eigen::Vector4d>& pts, const Eigen::Isometry3d& T)
+{
+    // Same as fs_integrate() on the raw scan (denser rays; labels unknown, so every endpoint is occupied).
+    ++fs_frame_;
+    if (params_.fs_decay < 1.0 && fs_pow_.empty()) {
+        fs_pow_.resize(2000); double q = 1.0;
+        for (auto& x : fs_pow_) { x = static_cast<float>(q); q *= params_.fs_decay; }
+    }
+    const double res = params_.fs_res, inv = 1.0 / res, r2max = params_.fs_max_range * params_.fs_max_range;
+    const Eigen::Vector3d o = T.translation();
+    const int stride = std::max(1, params_.fs_ray_stride);
+    const auto bump = [&](float& v, uint32_t& last) {
+        if (last == fs_frame_) return;
+        v = fs_decayed(v, last) + 1.f; if (v > 60000.f) v = 60000.f; last = fs_frame_;
+    };
+    for (size_t i = 0; i < pts.size(); i += stride) {
+        const auto& p = pts[i];
+        const double d2 = p.head<3>().squaredNorm();
+        if (!(d2 > 1e-4) || d2 > r2max) continue;
+        const Eigen::Vector3d w = T * p.head<3>();
+        { auto& ce = fs_map_[fs_key(w, inv)]; bump(ce.occ, ce.last_occ); ce.marked = true; }
+        const double d = std::sqrt(d2);
+        const double L = d - std::max(params_.fs_margin, params_.fs_margin_rel * d);
+        if (L <= 0.0) continue;
+        const Eigen::Vector3d dir = (w - o) / d;
+        int64_t prev = -1;
+        for (double t = 0.5 * res; t < L; t += 0.5 * res) {
+            const int64_t k = fs_key(o + t * dir, inv);
+            if (k == prev) continue;
+            prev = k; auto& cf = fs_map_[k]; bump(cf.free, cf.last_free);
+        }
+    }
+    if (fs_frame_ % 20 == 0) {
+        const double keep2 = std::pow(params_.fs_max_range + 10.0, 2);
+        auto sx = [](int64_t a) { return (a & 0x100000) ? a - 0x200000 : a; };
+        for (auto it = fs_map_.begin(); it != fs_map_.end();) {
+            const int64_t k = it->first;
+            const Eigen::Vector2d cxy((sx((k >> 42) & 0x1FFFFF) + 0.5) * res, (sx((k >> 21) & 0x1FFFFF) + 0.5) * res);
+            if ((cxy - o.head<2>()).squaredNorm() > keep2) it = fs_map_.erase(it); else ++it;
+        }
+    }
 }
 
 void DynamicObjectRejectionCPU::fs_integrate(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T)
