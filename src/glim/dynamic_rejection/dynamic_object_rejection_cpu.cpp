@@ -97,6 +97,9 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     point_ground_cut_min_range     = config.param<double>(k, "point_ground_cut_min_range",     0.0);
     fs_enabled                     = config.param<bool>  (k, "fs_enabled",                     false);
     vis_raw                        = config.param<bool>  (k, "vis_raw",                        false);
+    large_box_len                  = config.param<double>(k, "large_box_len",                  1e9);
+    large_box_ratio                = config.param<double>(k, "large_box_ratio",                0.7);
+    large_box_vis                  = config.param<double>(k, "large_box_vis",                  0.3);
     vis_raw_max_range              = config.param<double>(k, "vis_raw_max_range",              40.0);
     fs_raw                         = config.param<bool>  (k, "fs_raw",                         false);
     pe_mode                        = config.param<int>   (k, "pe_mode",                        0);
@@ -1107,7 +1110,9 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             const double vm = vis_sum[c] / total_count[c];
             const double sp = std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed());
             const bool tall_c = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
-            cluster_bboxes[c].set_frame_evidence(tall_c ? ratio + vm : 0.0,
+            const bool large_c = std::max(cluster_bboxes[c].get_size().x(), cluster_bboxes[c].get_size().y()) > params_.large_box_len;
+            const bool strong_c = !large_c || (ratio > params_.large_box_ratio && vm >= params_.large_box_vis);
+            cluster_bboxes[c].set_frame_evidence(tall_c && strong_c ? ratio + vm : 0.0,
                                                  dynamic_count[c] == 0 && vm <= 0.0 && sp < params_.min_obj_speed);
         }
 
@@ -1123,7 +1128,11 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         const double speed    = std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed());
         const bool tall   = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
         const bool moving = params_.min_obj_speed <= 0.0 || speed >= params_.min_obj_speed || vis_mean >= params_.moving_vis_alt;
-        const bool is_dyn = ratio > eff_prop_threshold && tall && moving;
+        // Vehicle-sized clusters (longer than large_box_len) need stronger evidence: they are
+        // mostly parked cars / hedges, whose voxel noise would otherwise confirm them.
+        const bool large  = std::max(cluster_bboxes[c].get_size().x(), cluster_bboxes[c].get_size().y()) > params_.large_box_len;
+        const bool is_dyn = large ? (ratio > params_.large_box_ratio && vis_mean >= params_.large_box_vis && tall)
+                                  : (ratio > eff_prop_threshold && tall && moving);
         // Fast confirmation: very strong evidence in this frame -> remove now, without waiting
         // for the hysteresis (the tracker still counts it as one confirmed frame).
         if (is_dyn && params_.fast_confirm_ratio_factor > 0.0 &&

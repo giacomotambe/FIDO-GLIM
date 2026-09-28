@@ -68,6 +68,9 @@ public:
     double foot_min_hag;
     // Point-level refinement (final step)
     double point_ground_cut;              ///< Points of dynamic voxels lower than this above the local ground stay static (<= 0 = off).
+    double large_box_len;                 ///< Clusters longer than this [m] need large_box_ratio / large_box_vis to be dynamic.
+    double large_box_ratio;
+    double large_box_vis;
     bool   vis_raw;                       ///< Past range images (free-space test) built from the raw scan instead of the voxel points.
     double vis_raw_max_range;             ///< Raw points beyond this range are ignored [m].
     bool   fs_raw;                        ///< Free-space map integrated from the raw scan.
