@@ -1,4 +1,6 @@
 #include <glim/dynamic_rejection/dynamic_object_rejection_cpu.hpp>
+#include <unordered_set>
+#include <cstring>
 
 #include <algorithm>
 #include <cmath>
@@ -98,6 +100,12 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     fs_enabled                     = config.param<bool>  (k, "fs_enabled",                     false);
     vis_raw                        = config.param<bool>  (k, "vis_raw",                        false);
     large_box_len                  = config.param<double>(k, "large_box_len",                  1e9);
+    fut_delay                      = config.param<int>   (k, "fut_delay",                      0);
+    fut_output_delayed             = config.param<bool>  (k, "fut_output_delayed",             false);
+    fut_min_age                    = config.param<int>   (k, "fut_min_age",                    4);
+    fut_age_step                   = config.param<int>   (k, "fut_age_step",                   3);
+    fut_ratio                      = config.param<double>(k, "fut_ratio",                      0.6);
+    fut_max_range                  = config.param<double>(k, "fut_max_range",                  22.0);
     icp_enable                     = config.param<bool>  (k, "icp_enable",                     false);
     icp_min_len                    = config.param<double>(k, "icp_min_len",                    2.5);
     icp_gap_frames                 = config.param<int>   (k, "icp_gap_frames",                 5);
@@ -171,6 +179,8 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
         frame_num_memory = compare_baseline_frames;
     if (visibility_enabled && frame_num_memory < visibility_max_age)
         frame_num_memory = visibility_max_age;
+    if (fut_delay > 0 && frame_num_memory < fut_delay + 1)
+        frame_num_memory = fut_delay + 1;
 
     spdlog::debug("[dynamic_rejection] params loaded");
 }
@@ -338,6 +348,13 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
         result.static_frame  ? result.static_frame->points.size()  : 0,
         result.dynamic_frame ? result.dynamic_frame->points.size() : 0);
 
+    if (params_.fut_delay > 0) {
+        Pending p; p.static_frame = result.static_frame; p.dynamic_frame = result.dynamic_frame;
+        p.stamp = source_frame ? source_frame->stamp : 0.0; p.pose = cur_pose;
+        collect_delay_candidates(*wf_result.voxelmap, cluster_bboxes, p);
+        pending_.push_back(std::move(p));
+        if (static_cast<int>(pending_.size()) > params_.fut_delay) finalize_delayed(result);
+    }
     return result;
 }
 
@@ -1314,6 +1331,98 @@ double DynamicObjectRejectionCPU::icp_translation(const std::vector<Eigen::Vecto
     }
     rms = std::sqrt(se / std::max(in, 1));
     return static_cast<double>(in) / src.size();
+}
+
+
+// ===========================================================================
+// Delayed decision (look-ahead free-space test)
+// ===========================================================================
+
+void DynamicObjectRejectionCPU::collect_delay_candidates(const gtsam_points::DynamicVoxelMapCPU& voxelmap,
+                                                         const std::vector<BoundingBox>& cluster_bboxes, Pending& p) const
+{
+    const int nvox = nvox_of(voxelmap), nc = static_cast<int>(cluster_bboxes.size());
+    const double r2 = params_.fut_max_range * params_.fut_max_range;
+    std::vector<int> slot(nc, -1);
+    for (int c = 0; c < nc; ++c) {
+        const auto& b = cluster_bboxes[c];
+        if (b.get_size().z() < params_.min_obj_height || b.get_center().head<2>().squaredNorm() > r2) continue;
+        slot[c] = static_cast<int>(p.boxes.size()); p.boxes.emplace_back();
+    }
+    for (int j = 0; j < nvox && j < static_cast<int>(voxel_bboxes_.size()); ++j) {
+        const auto& v = voxelmap.lookup_voxel(j);
+        if (v.is_wall || v.is_ground || v.is_outlier) continue;
+        const double g = hag_.empty() ? -1e9 : v.mean.z() - hag_[j];
+        for (const auto& [c, in_base] : voxel_bboxes_[j]) {
+            if (!in_base || c >= nc || slot[c] < 0) continue;
+            for (size_t k = 0; k < v.voxel_points.size(); ++k) {
+                if (k < v.voxel_times.size() && std::isnan(v.voxel_times[k])) continue;   // hybrid extra point
+                if (v.voxel_points[k].z() - g < params_.point_ground_cut) continue;
+                p.boxes[slot[c]].push_back(v.voxel_points[k].head<3>());
+            }
+        }
+    }
+}
+
+void DynamicObjectRejectionCPU::finalize_delayed(DynamicRejectionResult& result)
+{
+    Pending p = std::move(pending_.front()); pending_.pop_front();
+    const int D = params_.fut_delay, H = static_cast<int>(voxelmap_history_.size());
+    const double res = params_.visibility_res_deg * M_PI / 180.0;
+    const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res)), rows = static_cast<int>(std::ceil(M_PI / res));
+    while (range_img_history_.size() < voxelmap_history_.size())
+        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter)));
+    std::vector<int> idx; std::vector<Eigen::Isometry3d> T;
+    for (int k = params_.fut_min_age; k <= D; k += std::max(1, params_.fut_age_step)) {
+        const int h = H - 1 - (D - k);                  // history index of frame t+k (current frame t+D is last)
+        if (h < 0 || h >= H) continue;
+        idx.push_back(h); T.push_back(abs_pose_history_[h].inverse() * p.pose);
+    }
+    std::unordered_set<uint64_t> move;
+    const auto key = [](const Eigen::Vector3d& q) {
+        const float x = static_cast<float>(q.x()), y = static_cast<float>(q.y()), z = static_cast<float>(q.z());
+        uint32_t a, b, c; std::memcpy(&a, &x, 4); std::memcpy(&b, &y, 4); std::memcpy(&c, &z, 4);
+        return (static_cast<uint64_t>(a) * 0x9E3779B97F4A7C15ull) ^ (static_cast<uint64_t>(b) << 21) ^ static_cast<uint64_t>(c) * 0xC2B2AE3D27D4EB4Full;
+    };
+    for (const auto& box : p.boxes) {
+        if (box.size() < 3 || idx.empty()) continue;
+        int freep = 0;
+        for (const auto& q0 : box) {
+            int votes = 0, seen = 0;
+            for (size_t a = 0; a < idx.size(); ++a) {
+                const Eigen::Vector3d q = T[a] * q0;
+                const int c = std::min(cols - 1, static_cast<int>((std::atan2(q.y(), q.x()) + M_PI) / res));
+                const int r = std::min(rows - 1, std::max(0, static_cast<int>((std::atan2(q.z(), q.head<2>().norm()) + M_PI / 2.0) / res)));
+                const float fut = range_img_history_[idx[a]][r * cols + c];
+                if (!std::isfinite(fut)) continue;
+                ++seen;
+                const double d = q.norm();
+                if (fut > d + std::max(params_.visibility_abs_thr, params_.visibility_rel_thr * d)) ++votes;
+            }
+            if (seen > 0 && 2 * votes > seen) ++freep;
+        }
+        if (freep >= params_.fut_ratio * box.size())
+            for (const auto& q0 : box) move.insert(key(q0));
+    }
+    result.has_delayed = true; result.delayed_stamp = p.stamp;
+    if (move.empty() || !p.static_frame) { result.delayed_static_frame = p.static_frame; result.delayed_dynamic_frame = p.dynamic_frame; return; }
+    const int kn = p.static_frame->k_neighbors;
+    auto st = std::make_shared<PreprocessedFrame>(*p.static_frame);
+    auto dy = p.dynamic_frame ? std::make_shared<PreprocessedFrame>(*p.dynamic_frame) : std::make_shared<PreprocessedFrame>();
+    if (!p.dynamic_frame) { dy->stamp = p.static_frame->stamp; dy->scan_end_time = p.static_frame->scan_end_time; }
+    st->points.clear(); st->intensities.clear(); st->times.clear(); st->neighbors.clear(); st->k_neighbors = 0;
+    const auto& src = *p.static_frame;
+    for (size_t i = 0; i < src.points.size(); ++i) {
+        const bool m = move.count(key(src.points[i].head<3>())) > 0;
+        auto& out = m ? *dy : *st;
+        out.points.push_back(src.points[i]);
+        if (i < src.intensities.size()) out.intensities.push_back(src.intensities[i]);
+        if (i < src.times.size())       out.times.push_back(src.times[i]);
+    }
+    dy->k_neighbors = 0;
+    st->k_neighbors = kn;
+    if (kn > 0 && !st->points.empty()) st->neighbors = find_neighbors(st->points.data(), static_cast<int>(st->points.size()), kn);
+    result.delayed_static_frame = st; result.delayed_dynamic_frame = dy;
 }
 
 

@@ -150,11 +150,16 @@ void AsyncDynamicObjectRejection::run() {
             // ------------------------------------------------------------------
 
             wall_result_queue.push_back(wf);
-            output_frame_queue.push_back(dr.static_frame);
-            cluster_bbox_queue_.push_back(cluster_bboxes);
-            if (dr.dynamic_frame) {
-                dynamic_frame_queue.push_back(dr.dynamic_frame);
+            const bool use_delayed = dynamic_rejection_->params().fut_delay > 0 && dynamic_rejection_->params().fut_output_delayed;
+            if (!use_delayed) {
+                output_frame_queue.push_back(dr.static_frame);
+                if (dr.dynamic_frame) dynamic_frame_queue.push_back(dr.dynamic_frame);
+            } else if (dr.has_delayed) {
+                // Look-ahead mode: frames leave fut_delay frames late, refined with the following scans.
+                if (dr.delayed_static_frame) output_frame_queue.push_back(dr.delayed_static_frame);
+                if (dr.delayed_dynamic_frame && !dr.delayed_dynamic_frame->points.empty()) dynamic_frame_queue.push_back(dr.delayed_dynamic_frame);
             }
+            cluster_bbox_queue_.push_back(cluster_bboxes);
 
             // Always enqueue the wall result so the caller can publish wall
             // voxels even when no wall planes were found (num_wall_voxels == 0).

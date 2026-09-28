@@ -75,6 +75,12 @@ public:
     double icp_max_rms;                   ///< [m]
     double icp_min_inlier;                ///< Inlier fraction after alignment.
     int    icp_max_pts;
+    bool   fut_output_delayed;            ///< Async module outputs the delayed (refined) frames: mapping gets them fut_delay frames late.
+    int    fut_delay;                     ///< Delayed decision: frames of look-ahead (0 = off).
+    int    fut_min_age;                   ///< Future scans used: t+fut_min_age, +fut_age_step, ..., <= t+fut_delay.
+    int    fut_age_step;
+    double fut_ratio;                     ///< Box becomes dynamic when this fraction of its points is seen free later.
+    double fut_max_range;
     double large_box_len;                 ///< Clusters longer than this [m] need large_box_ratio / large_box_vis to be dynamic.
     double large_box_ratio;
     double large_box_vis;
@@ -171,6 +177,13 @@ struct DynamicRejectionResult {
     /// The classified voxelmap: wall voxels marked by WallFilter,
     /// dynamic voxels marked by the scorer. Useful for visualization.
     gtsam_points::DynamicVoxelMapCPU::Ptr voxelmap;
+
+    /// Delayed decision (fut_delay > 0): final labels of the frame received fut_delay calls ago,
+    /// refined with the free-space test against the following scans. Empty until the delay is filled.
+    bool   has_delayed = false;
+    double delayed_stamp = 0.0;
+    PreprocessedFrame::Ptr delayed_static_frame;
+    PreprocessedFrame::Ptr delayed_dynamic_frame;
 };
 
 // ---------------------------------------------------------------------------
@@ -350,6 +363,14 @@ private:
     std::vector<float> hag_;
     std::vector<std::vector<uint8_t>> fs_pt_;     ///< Per voxel, per point: 1 if the free-space map says the point fills known free space.
     std::vector<char> motion_core_;
+    struct Pending {
+        PreprocessedFrame::Ptr static_frame, dynamic_frame;
+        double stamp; Eigen::Isometry3d pose;
+        std::vector<std::vector<Eigen::Vector3d>> boxes;   ///< Candidate objects: non-ground points, sensor frame.
+    };
+    std::deque<Pending> pending_;
+    void collect_delay_candidates(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const std::vector<BoundingBox>& cluster_bboxes, Pending& p) const;
+    void finalize_delayed(DynamicRejectionResult& result);
     struct IcpEntry { int frame; double stamp; std::vector<Eigen::Vector3d> pts; };
     std::unordered_map<int, std::deque<IcpEntry>> icp_hist_;   ///< Per track: recent world-frame point sets.
     int icp_frame_ = 0;
