@@ -98,6 +98,13 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     fs_enabled                     = config.param<bool>  (k, "fs_enabled",                     false);
     vis_raw                        = config.param<bool>  (k, "vis_raw",                        false);
     large_box_len                  = config.param<double>(k, "large_box_len",                  1e9);
+    icp_enable                     = config.param<bool>  (k, "icp_enable",                     false);
+    icp_min_len                    = config.param<double>(k, "icp_min_len",                    2.5);
+    icp_gap_frames                 = config.param<int>   (k, "icp_gap_frames",                 5);
+    icp_min_speed                  = config.param<double>(k, "icp_min_speed",                  0.5);
+    icp_max_rms                    = config.param<double>(k, "icp_max_rms",                    0.2);
+    icp_min_inlier                 = config.param<double>(k, "icp_min_inlier",                 0.5);
+    icp_max_pts                    = config.param<int>   (k, "icp_max_pts",                    300);
     large_box_ratio                = config.param<double>(k, "large_box_ratio",                0.7);
     large_box_vis                  = config.param<double>(k, "large_box_vis",                  0.3);
     vis_raw_max_range              = config.param<double>(k, "vis_raw_max_range",              40.0);
@@ -264,6 +271,7 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
 
     const int nvox = nvox_of(*wf_result.voxelmap);
     propagate_to_neighbors(*wf_result.voxelmap, nvox);
+    cur_pose_ = cur_pose; cur_stamp_ = source_frame ? source_frame->stamp : cur_stamp_ + 0.1; ++icp_frame_;
     propagate_to_clusters(*wf_result.voxelmap, cluster_bboxes, historical_bboxes);
     if (params_.evidence_enabled) apply_world_evidence(*wf_result.voxelmap, cur_pose);
     if (params_.point_refine_enabled) refine_points(*wf_result.voxelmap);
@@ -1072,7 +1080,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     std::vector<int> dynamic_count(n_clusters, 0);
     std::vector<int> total_count  (n_clusters, 0);
     std::vector<double> vis_sum   (n_clusters, 0.0);
-    std::vector<std::vector<int>> members(params_.split_enable ? n_clusters : 0);
+    std::vector<std::vector<int>> members((params_.split_enable || params_.icp_enable) ? n_clusters : 0);
 
     // Dynamic-wins multi-cluster assignment: a voxel contributes to ALL base bboxes containing it.
     for (int j = 0; j < nvox; ++j) {
@@ -1081,9 +1089,51 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             if (!in_base) continue;
             ++total_count[c];
             if (dyn) ++dynamic_count[c];
-            if (params_.split_enable) members[c].push_back(j);
+            if (params_.split_enable || params_.icp_enable) members[c].push_back(j);
             if (!vis_frac_.empty()) vis_sum[c] += vis_frac_[j];
         }
+    }
+
+    // ICP motion of vehicle-sized clusters: world-frame points vs the same track icp_gap_frames ago.
+    std::vector<int> icp_state(n_clusters, -1);   // -1 unknown, 0 static, 1 moving
+    if (params_.icp_enable) {
+        for (int c = 0; c < n_clusters; ++c) {
+            const auto& b = cluster_bboxes[c];
+            const int tid = b.get_track_id();
+            if (tid < 0 || std::max(b.get_size().x(), b.get_size().y()) <= params_.icp_min_len) continue;
+            std::vector<Eigen::Vector3d> w;
+            for (int j : members[c]) {
+                if (!hag_.empty() && hag_[j] < params_.ground_band_m) continue;
+                for (const auto& p : voxelmap.lookup_voxel(j).voxel_points) w.push_back(cur_pose_ * p.head<3>());
+            }
+            if (w.size() < 10) continue;
+            if (static_cast<int>(w.size()) > params_.icp_max_pts) {
+                std::vector<Eigen::Vector3d> s; const double st = static_cast<double>(w.size()) / params_.icp_max_pts;
+                for (double f = 0; f < w.size(); f += st) s.push_back(w[static_cast<size_t>(f)]);
+                w.swap(s);
+            }
+            auto& h = icp_hist_[tid];
+            const IcpEntry* ref = nullptr;
+            for (const auto& e : h) if (icp_frame_ - e.frame >= params_.icp_gap_frames) ref = &e;
+            if (ref && ref->pts.size() >= 10 && cur_stamp_ > ref->stamp) {
+                Eigen::Vector3d cs = Eigen::Vector3d::Zero(), cr = Eigen::Vector3d::Zero();
+                for (const auto& p : w) cs += p; cs /= w.size();
+                for (const auto& p : ref->pts) cr += p; cr /= ref->pts.size();
+                double best_in = -1, best_rms = 1e9; Eigen::Vector3d best_t = Eigen::Vector3d::Zero();
+                for (const Eigen::Vector3d& t0 : {Eigen::Vector3d::Zero().eval(), (cr - cs).eval()}) {
+                    Eigen::Vector3d t = t0; double rms = 0;
+                    const double in = icp_translation(w, ref->pts, t, rms, 0.5);
+                    if (in > best_in + 1e-6 || (std::abs(in - best_in) < 1e-6 && rms < best_rms)) { best_in = in; best_rms = rms; best_t = t; }
+                }
+                const double spd = best_t.head<2>().norm() / (cur_stamp_ - ref->stamp);
+                if (best_in >= params_.icp_min_inlier && best_rms <= params_.icp_max_rms)
+                    icp_state[c] = spd >= params_.icp_min_speed ? 1 : 0;
+            }
+            h.push_back({icp_frame_, cur_stamp_, std::move(w)});
+            while (h.size() > static_cast<size_t>(params_.icp_gap_frames + 3)) h.pop_front();
+        }
+        for (auto it = icp_hist_.begin(); it != icp_hist_.end();)
+            if (it->second.empty() || icp_frame_ - it->second.back().frame > 20) it = icp_hist_.erase(it); else ++it;
     }
 
     // Scale the propagation threshold with robot motion.
@@ -1111,7 +1161,8 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             const double sp = std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed());
             const bool tall_c = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
             const bool large_c = std::max(cluster_bboxes[c].get_size().x(), cluster_bboxes[c].get_size().y()) > params_.large_box_len;
-            const bool strong_c = !large_c || (ratio > params_.large_box_ratio && vm >= params_.large_box_vis);
+            bool strong_c = !large_c || (ratio > params_.large_box_ratio && vm >= params_.large_box_vis);
+            if (params_.icp_enable && large_c && icp_state[c] >= 0) strong_c = icp_state[c] == 1;
             cluster_bboxes[c].set_frame_evidence(tall_c && strong_c ? ratio + vm : 0.0,
                                                  dynamic_count[c] == 0 && vm <= 0.0 && sp < params_.min_obj_speed);
         }
@@ -1131,8 +1182,10 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         // Vehicle-sized clusters (longer than large_box_len) need stronger evidence: they are
         // mostly parked cars / hedges, whose voxel noise would otherwise confirm them.
         const bool large  = std::max(cluster_bboxes[c].get_size().x(), cluster_bboxes[c].get_size().y()) > params_.large_box_len;
-        const bool is_dyn = large ? (ratio > params_.large_box_ratio && vis_mean >= params_.large_box_vis && tall)
-                                  : (ratio > eff_prop_threshold && tall && moving);
+        bool is_dyn = large ? (ratio > params_.large_box_ratio && vis_mean >= params_.large_box_vis && tall)
+                            : (ratio > eff_prop_threshold && tall && moving);
+        // ICP verdict overrides the voxel ratio for vehicle-sized clusters (when available).
+        if (params_.icp_enable && large && icp_state[c] >= 0) is_dyn = icp_state[c] == 1 && tall;
         // Fast confirmation: very strong evidence in this frame -> remove now, without waiting
         // for the hysteresis (the tracker still counts it as one confirmed frame).
         if (is_dyn && params_.fast_confirm_ratio_factor > 0.0 &&
@@ -1237,6 +1290,30 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         for (int j = 0; j < nvox; ++j) voxelmap.lookup_voxel(j).is_dynamic = pre[j];
         assign(true);
     }
+}
+
+
+double DynamicObjectRejectionCPU::icp_translation(const std::vector<Eigen::Vector3d>& src, const std::vector<Eigen::Vector3d>& dst,
+                                                  Eigen::Vector3d& t, double& rms, double max_d)
+{
+    const double md2 = max_d * max_d;
+    int in = 0; double se = 0.0;
+    for (int it = 0; it < 10; ++it) {
+        Eigen::Vector3d acc = Eigen::Vector3d::Zero(); in = 0; se = 0.0;
+        for (const auto& p : src) {
+            const Eigen::Vector3d q = p + t;
+            double bd = md2; int bj = -1;
+            for (size_t j = 0; j < dst.size(); ++j) { const double d = (dst[j] - q).squaredNorm(); if (d < bd) { bd = d; bj = static_cast<int>(j); } }
+            if (bj < 0) continue;
+            acc += dst[bj] - q; ++in; se += bd;
+        }
+        if (in < 3) { rms = 1e9; return 0.0; }
+        const Eigen::Vector3d dt = acc / in;
+        t += dt;
+        if (dt.norm() < 1e-3) break;
+    }
+    rms = std::sqrt(se / std::max(in, 1));
+    return static_cast<double>(in) / src.size();
 }
 
 

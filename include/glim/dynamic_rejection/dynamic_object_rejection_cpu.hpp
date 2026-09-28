@@ -68,6 +68,13 @@ public:
     double foot_min_hag;
     // Point-level refinement (final step)
     double point_ground_cut;              ///< Points of dynamic voxels lower than this above the local ground stay static (<= 0 = off).
+    bool   icp_enable;                    ///< Motion of vehicle-sized clusters from ICP against the same track icp_gap_frames ago.
+    double icp_min_len;                   ///< Clusters longer than this [m] keep an ICP point history.
+    int    icp_gap_frames;
+    double icp_min_speed;                 ///< [m/s]
+    double icp_max_rms;                   ///< [m]
+    double icp_min_inlier;                ///< Inlier fraction after alignment.
+    int    icp_max_pts;
     double large_box_len;                 ///< Clusters longer than this [m] need large_box_ratio / large_box_vis to be dynamic.
     double large_box_ratio;
     double large_box_vis;
@@ -342,7 +349,15 @@ private:
     void push_raw_range_image(const PreprocessedFrame::Ptr& frame);
     std::vector<float> hag_;
     std::vector<std::vector<uint8_t>> fs_pt_;     ///< Per voxel, per point: 1 if the free-space map says the point fills known free space.
-    std::vector<char> motion_core_;               ///< Per voxel: part of the motion core of a (fused) static cluster.
+    std::vector<char> motion_core_;
+    struct IcpEntry { int frame; double stamp; std::vector<Eigen::Vector3d> pts; };
+    std::unordered_map<int, std::deque<IcpEntry>> icp_hist_;   ///< Per track: recent world-frame point sets.
+    int icp_frame_ = 0;
+    double cur_stamp_ = 0.0;
+    Eigen::Isometry3d cur_pose_ = Eigen::Isometry3d::Identity();
+    /// Translation-only ICP of src onto dst (world frame). Returns inlier fraction, fills t and rms.
+    static double icp_translation(const std::vector<Eigen::Vector3d>& src, const std::vector<Eigen::Vector3d>& dst,
+                                  Eigen::Vector3d& t, double& rms, double max_d);               ///< Per voxel: part of the motion core of a (fused) static cluster.
     void point_evidence_labels(const gtsam_points::DynamicVoxelMapCPU& voxelmap);
     std::vector<std::vector<uint8_t>> vis_pt_;     ///< Per voxel, per point: 0 unknown, 1 appeared in free space, 2 consistent with the past.
     std::vector<std::vector<uint8_t>> point_dyn_;  ///< Per voxel, per point final label (empty = use voxel label).
