@@ -1,6 +1,7 @@
 {
   "wall_filter": {
       "voxel_resolution": 0.25,
+      "rng_seed": -1,
       "ransac_max_iterations": 100,
       "ransac_inlier_threshold": 0.07,
       "ransac_min_inliers": 30,

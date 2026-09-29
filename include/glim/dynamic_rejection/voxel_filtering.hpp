@@ -47,6 +47,7 @@ struct WallFilterResult {
 
 struct WallFilterConfig {
     double voxel_resolution;
+    int    rng_seed;               ///< RANSAC seed (< 0 = random_device; fixed for reproducible runs)
     int    ransac_max_iterations;
     double ransac_inlier_threshold;
     int    ransac_min_inliers;

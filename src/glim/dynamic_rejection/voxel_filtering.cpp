@@ -25,6 +25,7 @@ WallFilterConfig::WallFilterConfig() {
 
     // voxel resolution must match odometry to reuse the same voxelmap
     voxel_resolution        = config.param<double>("wall_filter", "voxel_resolution",        0.5);
+    rng_seed                = config.param<int>   ("wall_filter", "rng_seed",                -1);
     ransac_max_iterations   = config.param<int>   ("wall_filter", "ransac_max_iterations",   500);
     ransac_inlier_threshold = config.param<double>("wall_filter", "ransac_inlier_threshold", 0.15);
     ransac_min_inliers      = config.param<int>   ("wall_filter", "ransac_min_inliers",      8);
@@ -67,7 +68,7 @@ WallFilterConfig::~WallFilterConfig() {
 
 // ---------------------------------------------------------------------------
 WallFilter::WallFilter(const WallFilterConfig& config, WallBBoxRegistry::Ptr bbox_registry,const std::shared_ptr<PoseKalmanFilter>& pose_kalman_filter)
-    : config_(config), rng_(std::random_device{}()), bbox_registry_(bbox_registry), pose_kalman_filter_(pose_kalman_filter), last_pose_(Eigen::Isometry3d::Identity()) {}
+    : config_(config), rng_(config.rng_seed >= 0 ? static_cast<unsigned>(config.rng_seed) : std::random_device{}()), bbox_registry_(bbox_registry), pose_kalman_filter_(pose_kalman_filter), last_pose_(Eigen::Isometry3d::Identity()) {}
 
 // ---------------------------------------------------------------------------
 WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
