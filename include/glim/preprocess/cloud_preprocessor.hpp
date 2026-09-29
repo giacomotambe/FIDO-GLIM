@@ -21,6 +21,8 @@ public:
   double distance_near_thresh;        ///< Minimum distance threshold
   double distance_far_thresh;         ///< Maximum distance threshold
   bool global_shutter;                ///< Assume all points in a scan are takes at the same moment and replace per-point timestamps with zero (disable deskewing)
+  bool use_uniform_downsampling;
+  int raw_points_target;              ///< > 0: the scan is first reduced to this many random points (used both as raw scan for the rejection and as input of the downsampling)      ///< If true, plain uniform random sampling to random_downsample_target (dense near the sensor; used for dynamic rejection tuning)
   bool use_random_grid_downsampling;  ///< If true, use random grid downsampling, otherwise, use the conventional voxel grid
   double downsample_resolution;       ///< Downsampling resolution
   int downsample_target;              ///< Target number of points for downsampling

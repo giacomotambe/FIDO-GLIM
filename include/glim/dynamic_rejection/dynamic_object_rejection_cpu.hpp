@@ -79,6 +79,8 @@ public:
     double min_obj_vis;                   ///< Min mean free-space fraction of a cluster to be dynamic in the frame (0 = off).
     double min_obj_vis_max_range;         ///< min_obj_vis applies only within this range [m].
     double view_change_k;                 ///< Dead-zone term for viewpoint change: k * voxel * min(1, baseline / range).
+    int    rej_input_points;              ///< > 0: rejection runs on this many uniformly sampled raw points (labels transferred back).
+    double label_transfer_radius;         ///< [m]
     int    fut_delay;                     ///< Delayed decision: frames of look-ahead (0 = off).
     int    fut_min_age;                   ///< Future scans used: t+fut_min_age, +fut_age_step, ..., <= t+fut_delay.
     int    fut_age_step;
@@ -89,6 +91,7 @@ public:
     double large_box_vis;
     bool   vis_raw;                       ///< Past range images (free-space test) built from the raw scan instead of the voxel points.
     double vis_raw_max_range;             ///< Raw points beyond this range are ignored [m].
+    int    vis_raw_max_points;            ///< Raw points used for the past range images (0 = all).
     bool   fs_raw;                        ///< Free-space map integrated from the raw scan.
     int    pe_mode;                       ///< Cluster-free point labels: 0 off, 1 range-image AND map free space, 2 map only.
     int    pe_min_points;                 ///< Min strong points in a voxel to relabel it.
@@ -254,6 +257,13 @@ public:
      *        when frame->raw_points is not available.
      */
     static PreprocessedFrame::Ptr make_hybrid_frame(const PreprocessedFrame::Ptr& frame, const DynamicObjectRejectionParamsCPU& params);
+    /// Input of the rejection when rej_input_points > 0: a uniform random subsample of the raw scan
+    /// (the odometry downsampling - random grid - leaves too few points on near objects).
+    /// Falls back to make_hybrid_frame(frame) when disabled or no raw scan is attached.
+    static PreprocessedFrame::Ptr make_rejection_frame(const PreprocessedFrame::Ptr& frame, const DynamicObjectRejectionParamsCPU& params);
+    /// Copies the labels of the rejection input (static/dynamic) onto the points of `target`
+    /// (nearest labelled point within label_transfer_radius; farther points stay static).
+    static void transfer_labels(const PreprocessedFrame::Ptr& target, DynamicRejectionResult& result, const DynamicObjectRejectionParamsCPU& params);
     const DynamicObjectRejectionParamsCPU& params() const { return params_; }
 
     // -----------------------------------------------------------------------

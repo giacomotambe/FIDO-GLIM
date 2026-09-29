@@ -1,5 +1,7 @@
 #include <glim/dynamic_rejection/dynamic_object_rejection_cpu.hpp>
 #include <unordered_set>
+#include <random>
+#include <numeric>
 #include <cstring>
 
 #include <algorithm>
@@ -101,6 +103,8 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     vis_raw                        = config.param<bool>  (k, "vis_raw",                        false);
     large_box_len                  = config.param<double>(k, "large_box_len",                  1e9);
     fut_delay                      = config.param<int>   (k, "fut_delay",                      0);
+    rej_input_points               = config.param<int>   (k, "rej_input_points",               0);
+    label_transfer_radius          = config.param<double>(k, "label_transfer_radius",          0.5);
     min_obj_vis                    = config.param<double>(k, "min_obj_vis",                    0.0);
     view_change_k                  = config.param<double>(k, "view_change_k",                  0.0);
     min_obj_vis_max_range          = config.param<double>(k, "min_obj_vis_max_range",          1e9);
@@ -119,6 +123,7 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     large_box_ratio                = config.param<double>(k, "large_box_ratio",                0.7);
     large_box_vis                  = config.param<double>(k, "large_box_vis",                  0.3);
     vis_raw_max_range              = config.param<double>(k, "vis_raw_max_range",              40.0);
+    vis_raw_max_points             = config.param<int>   (k, "vis_raw_max_points",             0);
     fs_raw                         = config.param<bool>  (k, "fs_raw",                         false);
     pe_mode                        = config.param<int>   (k, "pe_mode",                        0);
     pe_min_points                  = config.param<int>   (k, "pe_min_points",                  2);
@@ -758,7 +763,21 @@ void DynamicObjectRejectionCPU::push_raw_range_image(const PreprocessedFrame::Pt
     while (range_img_history_.size() + 1 < voxelmap_history_.size())
         range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter)));
     if (range_img_history_.size() + 1 == voxelmap_history_.size())
-        range_img_history_.push_back(build_range_image_pts(frame->raw_points->points, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range));
+    {
+        const auto& rp = frame->raw_points->points;
+        if (params_.vis_raw_max_points > 0 && static_cast<int>(rp.size()) > params_.vis_raw_max_points) {
+            // Keep the raw density used for tuning (~30k points): denser images see the object's own past.
+            // Random (not strided) subset: raw scans are ordered by ring/column and a stride drops whole rings.
+            std::vector<int> ix(rp.size()); std::iota(ix.begin(), ix.end(), 0);
+            std::mt19937 mt(12345);
+            for (int k = 0; k < params_.vis_raw_max_points; ++k) std::swap(ix[k], ix[k + mt() % (ix.size() - k)]);
+            std::vector<Eigen::Vector4d> sub; sub.reserve(params_.vis_raw_max_points);
+            for (int k = 0; k < params_.vis_raw_max_points; ++k) sub.push_back(rp[ix[k]]);
+            range_img_history_.push_back(build_range_image_pts(sub, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range));
+        } else {
+            range_img_history_.push_back(build_range_image_pts(rp, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range));
+        }
+    }
 }
 
 void DynamicObjectRejectionCPU::compute_visibility(
@@ -1561,6 +1580,79 @@ void DynamicObjectRejectionCPU::refine_points(const gtsam_points::DynamicVoxelMa
 
 
 // ===========================================================================
+// make_rejection_frame() / transfer_labels()
+// ===========================================================================
+
+PreprocessedFrame::Ptr DynamicObjectRejectionCPU::make_rejection_frame(
+    const PreprocessedFrame::Ptr& frame, const DynamicObjectRejectionParamsCPU& params)
+{
+    if (params.rej_input_points <= 0 || !frame || !frame->raw_points || frame->raw_points->points.empty())
+        return make_hybrid_frame(frame, params);
+    const auto& raw = *frame->raw_points;
+    std::vector<int> idx;
+    idx.reserve(raw.points.size());
+    for (int i = 0; i < static_cast<int>(raw.points.size()); ++i) {
+        const double d2 = raw.points[i].head<3>().squaredNorm();
+        if (raw.points[i].allFinite() && d2 > 1.0 && d2 < 1e4) idx.push_back(i);
+    }
+    std::mt19937 mt(static_cast<unsigned>(std::llround(frame->stamp * 1000.0)));
+    if (static_cast<int>(idx.size()) > params.rej_input_points) {
+        std::shuffle(idx.begin(), idx.end(), mt);
+        idx.resize(params.rej_input_points);
+    }
+    auto f = std::make_shared<PreprocessedFrame>();
+    f->stamp = frame->stamp; f->scan_end_time = frame->scan_end_time; f->k_neighbors = 0;
+    f->raw_points = frame->raw_points;
+    const bool has_int = raw.intensities.size() == raw.points.size(), has_t = raw.times.size() == raw.points.size();
+    for (int i : idx) {
+        Eigen::Vector4d p = raw.points[i]; p.w() = 1.0;
+        f->points.push_back(p);
+        f->intensities.push_back(has_int ? raw.intensities[i] : 0.0);
+        f->times.push_back(has_t ? raw.times[i] : 0.0);
+    }
+    return make_hybrid_frame(f, params);
+}
+
+void DynamicObjectRejectionCPU::transfer_labels(const PreprocessedFrame::Ptr& target, DynamicRejectionResult& result,
+                                                const DynamicObjectRejectionParamsCPU& params)
+{
+    if (!target) return;
+    std::vector<Eigen::Vector4d> pts; std::vector<char> dyn;
+    if (result.static_frame)  for (const auto& p : result.static_frame->points)  { pts.push_back(p); dyn.push_back(0); }
+    if (result.dynamic_frame) for (const auto& p : result.dynamic_frame->points) { pts.push_back(p); dyn.push_back(1); }
+    auto st = std::make_shared<PreprocessedFrame>(); auto dy = std::make_shared<PreprocessedFrame>();
+    for (auto* o : {st.get(), dy.get()}) { o->stamp = target->stamp; o->scan_end_time = target->scan_end_time; o->k_neighbors = 0; }
+    const double r2 = params.label_transfer_radius * params.label_transfer_radius;
+    std::unique_ptr<gtsam_points::KdTree> tree;
+    if (!pts.empty()) tree = std::make_unique<gtsam_points::KdTree>(pts.data(), pts.size());
+    for (size_t i = 0; i < target->points.size(); ++i) {
+        bool d = false;
+        if (tree) {
+            size_t k; double sq;
+            if (tree->knn_search(target->points[i].data(), 1, &k, &sq) && sq <= r2) d = dyn[k] != 0;
+        }
+        auto& o = d ? *dy : *st;
+        o.points.push_back(target->points[i]);
+        if (i < target->intensities.size()) o.intensities.push_back(target->intensities[i]);
+        if (i < target->times.size())       o.times.push_back(target->times[i]);
+    }
+    st->k_neighbors = target->k_neighbors;
+    if (st->k_neighbors > 0 && !st->points.empty()) {
+        // same neighbour search as build_frame()
+        gtsam_points::KdTree kt(st->points.data(), st->points.size());
+        const int K = st->k_neighbors; st->neighbors.assign(st->points.size() * K, 0);
+        std::vector<size_t> ki(K); std::vector<double> kd(K);
+        for (size_t i = 0; i < st->points.size(); ++i) {
+            const size_t nf = kt.knn_search(st->points[i].data(), K, ki.data(), kd.data());
+            for (int k = 0; k < K; ++k) st->neighbors[i * K + k] = static_cast<int>(ki[std::min<size_t>(k, nf ? nf - 1 : 0)]);
+        }
+    }
+    result.static_frame = st;
+    result.dynamic_frame = dy->points.empty() ? nullptr : dy;
+}
+
+
+// ===========================================================================
 // make_hybrid_frame()
 // ===========================================================================
 
@@ -1578,6 +1670,12 @@ PreprocessedFrame::Ptr DynamicObjectRejectionCPU::make_hybrid_frame(
     }
     if (sel.empty()) return frame;
     const int cap = params.hybrid_max_points;
+    if (cap > 0 && static_cast<int>(sel.size()) > cap) {
+        // Random subset (raw scans are ordered by ring/column: a plain stride would drop whole rings).
+        std::mt19937 mt(static_cast<unsigned>(sel.size()));
+        for (int k = 0; k < cap; ++k) std::swap(sel[k], sel[k + mt() % (sel.size() - k)]);
+        sel.resize(cap);
+    }
     const double step = (cap > 0 && static_cast<int>(sel.size()) > cap) ? static_cast<double>(sel.size()) / cap : 1.0;
 
     auto aug = std::make_shared<PreprocessedFrame>(*frame);

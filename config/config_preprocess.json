@@ -6,6 +6,9 @@
   // downsample_resolution       : Voxel grid resolution for downsampling
   // random_downsample_target    : Target number of points for voxel-based random sampling (Enabled when > 0)
   // random_downsample_rate      : Sampling rate for voxel-based random sampling (Enabled when target <= 0)
+  // use_uniform_downsampling  : If true, plain uniform random sampling to random_downsample_target (overrides the options above).
+  //                             Keeps the sensor density profile: required by the dynamic object rejection (VOXEL).
+  // raw_points_target         : If > 0, the scan is first reduced to this many random points (raw scan seen by the rejection).
   // enable_outlier_removal      : If true, enable statistical outlier removal
   // outlier_removal_k           : Number of neighbors for outlier removal
   // outlier_std_mul_factor      : Standard deviation multiplier for outlier removal
@@ -16,6 +19,8 @@
     "distance_near_thresh": 0.5,
     "distance_far_thresh": 100.0,
     "use_random_grid_downsampling": true,
+    "use_uniform_downsampling": true,
+    "raw_points_target": 30000,
     "downsample_resolution": 1.0,
     "random_downsample_target": 10000,
     "random_downsample_rate": 0.1,

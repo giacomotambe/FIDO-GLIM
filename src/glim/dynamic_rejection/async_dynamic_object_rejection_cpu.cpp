@@ -91,7 +91,7 @@ void AsyncDynamicObjectRejection::run() {
             auto t_wall = std::chrono::steady_clock::now();
             // Hybrid density: the rejection works on the frame + far raw points; the output
             // frames contain only the original points (extra ones are dropped in reject()).
-            const auto work = DynamicObjectRejectionCPU::make_hybrid_frame(frame, dynamic_rejection_->params());
+            const auto work = DynamicObjectRejectionCPU::make_rejection_frame(frame, dynamic_rejection_->params());
             const WallFilterResult wf = wall_filter_->filter(*work);
             const double dt_wall = T(t_wall);
             spdlog::debug("[PERF] wall_filter      {:.1f} ms  ({} vox)", dt_wall, wf.num_total_voxels);
@@ -115,8 +115,11 @@ void AsyncDynamicObjectRejection::run() {
             // Step 2: DynamicObjectRejection — score non-wall voxels
             // ------------------------------------------------------------------
             auto t_reject = std::chrono::steady_clock::now();
-            const DynamicRejectionResult dr =
-                dynamic_rejection_->reject(wf, frame, cluster_bboxes, historical_bboxes);
+            DynamicRejectionResult dr =
+                dynamic_rejection_->reject(wf, dynamic_rejection_->params().rej_input_points > 0 ? work : frame, cluster_bboxes, historical_bboxes);
+            // Rejection ran on its own sample of the raw scan: copy the labels onto the odometry frame.
+            if (dynamic_rejection_->params().rej_input_points > 0 && work != frame)
+                DynamicObjectRejectionCPU::transfer_labels(frame, dr, dynamic_rejection_->params());
 
             // Feed propagate_to_clusters() results back to the tracker so the
             // hysteresis counter (dynamic_frames) reflects confirmed dynamic detections.

@@ -10,6 +10,7 @@
 #include <gtsam_points/util/parallelism.hpp>
 
 #include <glim/util/config.hpp>
+#include <numeric>
 #include <glim/util/convert_to_string.hpp>
 
 #ifdef GTSAM_POINTS_USE_TBB
@@ -28,6 +29,8 @@ CloudPreprocessorParams::CloudPreprocessorParams() {
   distance_near_thresh = config.param<double>("preprocess", "distance_near_thresh", 1.0);
   distance_far_thresh = config.param<double>("preprocess", "distance_far_thresh", 100.0);
   use_random_grid_downsampling = config.param<bool>("preprocess", "use_random_grid_downsampling", false);
+  use_uniform_downsampling = config.param<bool>("preprocess", "use_uniform_downsampling", false);
+  raw_points_target = config.param<int>("preprocess", "raw_points_target", 0);
   downsample_resolution = config.param<double>("preprocess", "downsample_resolution", 0.15);
   downsample_target = config.param<int>("preprocess", "random_downsample_target", 0);
   downsample_rate = config.param<double>("preprocess", "random_downsample_rate", 0.3);
@@ -99,8 +102,28 @@ PreprocessedFrame::Ptr CloudPreprocessor::preprocess(const RawPoints::ConstPtr& 
   return preprocessed;
 }
 
-PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::ConstPtr& raw_points) {
-  spdlog::trace("preprocessing input: {} points", raw_points->size());
+PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::ConstPtr& raw_points_in) {
+  spdlog::trace("preprocessing input: {} points", raw_points_in->size());
+
+  // Optional random reduction of the scan (the dynamic rejection was tuned with ~30k raw points and
+  // with the downsampled frame being a subset of its raw scan).
+  RawPoints::ConstPtr raw_points = raw_points_in;
+  if (params.raw_points_target > 0 && raw_points_in->size() > params.raw_points_target) {
+    std::vector<int> ix(raw_points_in->size());
+    std::iota(ix.begin(), ix.end(), 0);
+    for (int k = 0; k < params.raw_points_target; ++k) std::swap(ix[k], ix[k + mt() % (ix.size() - k)]);
+    ix.resize(params.raw_points_target);
+    auto r = std::make_shared<RawPoints>();
+    r->stamp = raw_points_in->stamp;
+    const bool has_i = raw_points_in->intensities.size() == raw_points_in->points.size();
+    const bool has_t = raw_points_in->times.size() == raw_points_in->points.size();
+    for (int k : ix) {
+      r->points.push_back(raw_points_in->points[k]);
+      if (has_i) r->intensities.push_back(raw_points_in->intensities[k]);
+      if (has_t) r->times.push_back(raw_points_in->times[k]);
+    }
+    raw_points = r;
+  }
 
   gtsam_points::PointCloudCPU::Ptr frame = std::make_shared<gtsam_points::PointCloudCPU>();
   frame->add_times(raw_points->times);
@@ -111,7 +134,12 @@ PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::Const
   PreprocessCallbacks::on_preprocessing_begin(frame);
 
   // Downsampling
-  if (params.use_random_grid_downsampling) {
+  if (params.use_uniform_downsampling) {
+    // Uniform random sampling: keeps the sensor's density profile (many points on near objects),
+    // which the dynamic object rejection relies on. The random grid below spreads points evenly in space.
+    const double rate = params.downsample_target > 0 ? static_cast<double>(params.downsample_target) / frame->size() : params.downsample_rate;
+    if (rate < 0.99) frame = gtsam_points::random_sampling(frame, rate, mt);
+  } else if (params.use_random_grid_downsampling) {
     const double rate = params.downsample_target > 0 ? static_cast<double>(params.downsample_target) / frame->size() : params.downsample_rate;
     frame = gtsam_points::randomgrid_sampling(frame, params.downsample_resolution, rate, mt, params.num_threads);
   } else {
