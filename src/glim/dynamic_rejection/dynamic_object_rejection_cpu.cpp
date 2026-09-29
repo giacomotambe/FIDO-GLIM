@@ -769,7 +769,7 @@ void DynamicObjectRejectionCPU::push_raw_range_image(const PreprocessedFrame::Pt
             // Keep the raw density used for tuning (~30k points): denser images see the object's own past.
             // Random (not strided) subset: raw scans are ordered by ring/column and a stride drops whole rings.
             std::vector<int> ix(rp.size()); std::iota(ix.begin(), ix.end(), 0);
-            std::mt19937 mt(12345);
+            std::mt19937 mt(static_cast<unsigned>(std::llround(frame->stamp * 1000.0)));   // new subset every frame: a fixed subset leaves the same holes in all past images
             for (int k = 0; k < params_.vis_raw_max_points; ++k) std::swap(ix[k], ix[k + mt() % (ix.size() - k)]);
             std::vector<Eigen::Vector4d> sub; sub.reserve(params_.vis_raw_max_points);
             for (int k = 0; k < params_.vis_raw_max_points; ++k) sub.push_back(rp[ix[k]]);

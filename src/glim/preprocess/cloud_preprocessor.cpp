@@ -11,6 +11,7 @@
 
 #include <glim/util/config.hpp>
 #include <numeric>
+#include <algorithm>
 #include <glim/util/convert_to_string.hpp>
 
 #ifdef GTSAM_POINTS_USE_TBB
@@ -111,7 +112,7 @@ PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::Const
   if (params.raw_points_target > 0 && raw_points_in->size() > params.raw_points_target) {
     std::vector<int> ix(raw_points_in->size());
     std::iota(ix.begin(), ix.end(), 0);
-    for (int k = 0; k < params.raw_points_target; ++k) std::swap(ix[k], ix[k + mt() % (ix.size() - k)]);
+    std::shuffle(ix.begin(), ix.end(), mt);
     ix.resize(params.raw_points_target);
     auto r = std::make_shared<RawPoints>();
     r->stamp = raw_points_in->stamp;
