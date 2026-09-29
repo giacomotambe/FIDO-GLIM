@@ -101,6 +101,9 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     vis_raw                        = config.param<bool>  (k, "vis_raw",                        false);
     large_box_len                  = config.param<double>(k, "large_box_len",                  1e9);
     fut_delay                      = config.param<int>   (k, "fut_delay",                      0);
+    min_obj_vis                    = config.param<double>(k, "min_obj_vis",                    0.0);
+    view_change_k                  = config.param<double>(k, "view_change_k",                  0.0);
+    min_obj_vis_max_range          = config.param<double>(k, "min_obj_vis_max_range",          1e9);
     fut_output_delayed             = config.param<bool>  (k, "fut_output_delayed",             false);
     fut_min_age                    = config.param<int>   (k, "fut_min_age",                    4);
     fut_age_step                   = config.param<int>   (k, "fut_age_step",                   3);
@@ -578,7 +581,10 @@ void DynamicObjectRejectionCPU::score_voxels(
         // Measurement noise (range dependent) + pose uncertainty accumulated over the baseline:
         // thresholds follow the expected error, not the vehicle speed (legacy motion_scale).
         const double sigma = std::min(params_.noise_sigma_max, params_.noise_sigma0 + params_.noise_sigma_slope * range)
-                           + params_.pose_err_trans_k * base_trans + params_.pose_err_rot_k * base_rot * range;
+                           + params_.pose_err_trans_k * base_trans + params_.pose_err_rot_k * base_rot * range
+                           // Viewpoint change: the sampled part of a surface moves with the parallax angle
+                           // (~ baseline / range), up to about a voxel.
+                           + params_.view_change_k * voxel_res * std::min(1.0, base_trans / std::max(range, 1.0));
         const double dead  = std::max(params_.min_shift_m, params_.noise_deadzone_k * sigma);
         const double shift = std::max(0.0, delta.norm() - dead) * inv_res;
 
@@ -1180,7 +1186,8 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             const bool large_c = std::max(cluster_bboxes[c].get_size().x(), cluster_bboxes[c].get_size().y()) > params_.large_box_len;
             bool strong_c = !large_c || (ratio > params_.large_box_ratio && vm >= params_.large_box_vis);
             if (params_.icp_enable && large_c && icp_state[c] >= 0) strong_c = icp_state[c] == 1;
-            cluster_bboxes[c].set_frame_evidence(tall_c && strong_c ? ratio + vm : 0.0,
+            const bool free_c = vm >= params_.min_obj_vis || cluster_bboxes[c].get_center().head<2>().norm() > params_.min_obj_vis_max_range;
+            cluster_bboxes[c].set_frame_evidence(tall_c && strong_c && free_c ? ratio + vm : 0.0,
                                                  dynamic_count[c] == 0 && vm <= 0.0 && sp < params_.min_obj_speed);
         }
 
@@ -1196,11 +1203,12 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         const double speed    = std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed());
         const bool tall   = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
         const bool moving = params_.min_obj_speed <= 0.0 || speed >= params_.min_obj_speed || vis_mean >= params_.moving_vis_alt;
+        const bool seen_free = vis_mean >= params_.min_obj_vis || cluster_bboxes[c].get_center().head<2>().norm() > params_.min_obj_vis_max_range;   // free-space evidence required (parked cars: centroid shift only)
         // Vehicle-sized clusters (longer than large_box_len) need stronger evidence: they are
         // mostly parked cars / hedges, whose voxel noise would otherwise confirm them.
         const bool large  = std::max(cluster_bboxes[c].get_size().x(), cluster_bboxes[c].get_size().y()) > params_.large_box_len;
         bool is_dyn = large ? (ratio > params_.large_box_ratio && vis_mean >= params_.large_box_vis && tall)
-                            : (ratio > eff_prop_threshold && tall && moving);
+                            : (ratio > eff_prop_threshold && tall && moving && seen_free);
         // ICP verdict overrides the voxel ratio for vehicle-sized clusters (when available).
         if (params_.icp_enable && large && icp_state[c] >= 0) is_dyn = icp_state[c] == 1 && tall;
         // Fast confirmation: very strong evidence in this frame -> remove now, without waiting

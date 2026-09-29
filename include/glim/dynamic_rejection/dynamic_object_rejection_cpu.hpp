@@ -76,6 +76,9 @@ public:
     double icp_min_inlier;                ///< Inlier fraction after alignment.
     int    icp_max_pts;
     bool   fut_output_delayed;            ///< Async module outputs the delayed (refined) frames: mapping gets them fut_delay frames late.
+    double min_obj_vis;                   ///< Min mean free-space fraction of a cluster to be dynamic in the frame (0 = off).
+    double min_obj_vis_max_range;         ///< min_obj_vis applies only within this range [m].
+    double view_change_k;                 ///< Dead-zone term for viewpoint change: k * voxel * min(1, baseline / range).
     int    fut_delay;                     ///< Delayed decision: frames of look-ahead (0 = off).
     int    fut_min_age;                   ///< Future scans used: t+fut_min_age, +fut_age_step, ..., <= t+fut_delay.
     int    fut_age_step;
