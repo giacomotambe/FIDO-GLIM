@@ -113,6 +113,16 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     fut_age_step                   = config.param<int>   (k, "fut_age_step",                   3);
     fut_ratio                      = config.param<double>(k, "fut_ratio",                      0.6);
     fut_max_range                  = config.param<double>(k, "fut_max_range",                  22.0);
+    vac_enable                     = config.param<bool>  (k, "vac_enable",                     false);
+    vac_gap_frames                 = config.param<int>   (k, "vac_gap_frames",                 8);
+    vac_min_disp                   = config.param<double>(k, "vac_min_disp",                   0.6);
+    vac_frac                       = config.param<double>(k, "vac_frac",                       0.8);
+    vac_min_pts                    = config.param<int>   (k, "vac_min_pts",                    4);
+    vac_min_seen                   = config.param<double>(k, "vac_min_seen",                   0.5);
+    vac_max_pts                    = config.param<int>   (k, "vac_max_pts",                    60);
+    vac_mid_tol                    = config.param<double>(k, "vac_mid_tol",                    0.3);
+    vac_require_tall               = config.param<bool>  (k, "vac_require_tall",               false);
+    vac_max_len                    = config.param<double>(k, "vac_max_len",                    0.0);
     icp_enable                     = config.param<bool>  (k, "icp_enable",                     false);
     icp_min_len                    = config.param<double>(k, "icp_min_len",                    2.5);
     icp_gap_frames                 = config.param<int>   (k, "icp_gap_frames",                 5);
@@ -223,6 +233,8 @@ DynamicObjectRejectionCPU::DynamicObjectRejectionCPU(
 // reject()  —  primary API
 // ===========================================================================
 
+static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapCPU& vm, int rows, int cols, double res, int F);
+
 DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     const WallFilterResult&         wf_result,
     const PreprocessedFrame::Ptr&   source_frame,
@@ -290,7 +302,18 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     const int nvox = nvox_of(*wf_result.voxelmap);
     propagate_to_neighbors(*wf_result.voxelmap, nvox);
     cur_pose_ = cur_pose; cur_stamp_ = source_frame ? source_frame->stamp : cur_stamp_ + 0.1; ++icp_frame_;
+    // Range image of the current scan for the vacated-space test (raw scan if available).
+    cur_range_img_.clear();
+    const bool has_raw = params_.vis_raw && source_frame && source_frame->raw_points && !source_frame->raw_points->points.empty();
+    if (params_.vac_enable) {
+        if (has_raw) cur_range_img_ = make_raw_range_image(source_frame);
+        else {
+            const double res = params_.visibility_res_deg * M_PI / 180.0;
+            cur_range_img_ = build_range_image(*wf_result.voxelmap, static_cast<int>(std::ceil(M_PI / res)), static_cast<int>(std::ceil(2.0 * M_PI / res)), res, std::max(0, params_.visibility_min_filter));
+        }
+    }
     propagate_to_clusters(*wf_result.voxelmap, cluster_bboxes, historical_bboxes);
+    if (!has_raw) cur_range_img_.clear();   // only a raw image is reused by push_raw_range_image()
     if (params_.evidence_enabled) apply_world_evidence(*wf_result.voxelmap, cur_pose);
     if (params_.point_refine_enabled) refine_points(*wf_result.voxelmap);
     else {
@@ -755,6 +778,23 @@ static std::vector<float> build_range_image_pts(const std::vector<Eigen::Vector4
     return out;
 }
 
+std::vector<float> DynamicObjectRejectionCPU::make_raw_range_image(const PreprocessedFrame::Ptr& frame) const {
+    const double res = params_.visibility_res_deg * M_PI / 180.0;
+    const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res)), rows = static_cast<int>(std::ceil(M_PI / res));
+    const auto& rp = frame->raw_points->points;
+    if (params_.vis_raw_max_points > 0 && static_cast<int>(rp.size()) > params_.vis_raw_max_points) {
+        // Keep the raw density used for tuning (~30k points): denser images see the object's own past.
+        // Random (not strided) subset: raw scans are ordered by ring/column and a stride drops whole rings.
+        std::vector<int> ix(rp.size()); std::iota(ix.begin(), ix.end(), 0);
+        std::mt19937 mt(static_cast<unsigned>(std::llround(frame->stamp * 1000.0)));   // new subset every frame: a fixed subset leaves the same holes in all past images
+        for (int k = 0; k < params_.vis_raw_max_points; ++k) std::swap(ix[k], ix[k + mt() % (ix.size() - k)]);
+        std::vector<Eigen::Vector4d> sub; sub.reserve(params_.vis_raw_max_points);
+        for (int k = 0; k < params_.vis_raw_max_points; ++k) sub.push_back(rp[ix[k]]);
+        return build_range_image_pts(sub, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range);
+    }
+    return build_range_image_pts(rp, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range);
+}
+
 void DynamicObjectRejectionCPU::push_raw_range_image(const PreprocessedFrame::Ptr& frame) {
     // Called right after the frame is pushed into voxelmap_history_: the lazy builder in
     // compute_visibility() then finds its image already there.
@@ -762,21 +802,10 @@ void DynamicObjectRejectionCPU::push_raw_range_image(const PreprocessedFrame::Pt
     const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res)), rows = static_cast<int>(std::ceil(M_PI / res));
     while (range_img_history_.size() + 1 < voxelmap_history_.size())
         range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter)));
-    if (range_img_history_.size() + 1 == voxelmap_history_.size())
-    {
-        const auto& rp = frame->raw_points->points;
-        if (params_.vis_raw_max_points > 0 && static_cast<int>(rp.size()) > params_.vis_raw_max_points) {
-            // Keep the raw density used for tuning (~30k points): denser images see the object's own past.
-            // Random (not strided) subset: raw scans are ordered by ring/column and a stride drops whole rings.
-            std::vector<int> ix(rp.size()); std::iota(ix.begin(), ix.end(), 0);
-            std::mt19937 mt(static_cast<unsigned>(std::llround(frame->stamp * 1000.0)));   // new subset every frame: a fixed subset leaves the same holes in all past images
-            for (int k = 0; k < params_.vis_raw_max_points; ++k) std::swap(ix[k], ix[k + mt() % (ix.size() - k)]);
-            std::vector<Eigen::Vector4d> sub; sub.reserve(params_.vis_raw_max_points);
-            for (int k = 0; k < params_.vis_raw_max_points; ++k) sub.push_back(rp[ix[k]]);
-            range_img_history_.push_back(build_range_image_pts(sub, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range));
-        } else {
-            range_img_history_.push_back(build_range_image_pts(rp, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range));
-        }
+    if (range_img_history_.size() + 1 == voxelmap_history_.size()) {
+        // Reuse the image built for the vacated-space test of this scan, if any.
+        if (!cur_range_img_.empty()) { range_img_history_.push_back(std::move(cur_range_img_)); cur_range_img_.clear(); }
+        else range_img_history_.push_back(make_raw_range_image(frame));
     }
 }
 
@@ -1122,7 +1151,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     std::vector<int> dynamic_count(n_clusters, 0);
     std::vector<int> total_count  (n_clusters, 0);
     std::vector<double> vis_sum   (n_clusters, 0.0);
-    std::vector<std::vector<int>> members((params_.split_enable || params_.icp_enable) ? n_clusters : 0);
+    std::vector<std::vector<int>> members((params_.split_enable || params_.icp_enable || params_.vac_enable) ? n_clusters : 0);
 
     // Dynamic-wins multi-cluster assignment: a voxel contributes to ALL base bboxes containing it.
     for (int j = 0; j < nvox; ++j) {
@@ -1131,7 +1160,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             if (!in_base) continue;
             ++total_count[c];
             if (dyn) ++dynamic_count[c];
-            if (params_.split_enable || params_.icp_enable) members[c].push_back(j);
+            if (!members.empty()) members[c].push_back(j);
             if (!vis_frac_.empty()) vis_sum[c] += vis_frac_[j];
         }
     }
@@ -1178,6 +1207,81 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             if (it->second.empty() || icp_frame_ - it->second.back().frame > 20) it = icp_hist_.erase(it); else ++it;
     }
 
+    // Vacated-space evidence: the track centroid moved and the place the object occupied
+    // vac_gap_frames ago is now seen through by the current scan. Catches moving objects without
+    // free-space evidence at their current position (moving away along the ray, entering
+    // previously occluded space, following another object).
+    std::vector<char> vac_state(n_clusters, 0);
+    if (params_.vac_enable && !cur_range_img_.empty()) {
+        const double res = params_.visibility_res_deg * M_PI / 180.0;
+        const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res)), rows = static_cast<int>(std::ceil(M_PI / res));
+        const Eigen::Isometry3d T_sensor_world = cur_pose_.inverse();
+        const auto mean_of = [](const std::vector<Eigen::Vector3d>& v) {
+            Eigen::Vector3d m = Eigen::Vector3d::Zero();
+            for (const auto& p : v) m += p;
+            return Eigen::Vector3d(m / static_cast<double>(v.size()));
+        };
+        for (int c = 0; c < n_clusters; ++c) {
+            const auto& b = cluster_bboxes[c];
+            const int tid = b.get_track_id();
+            if (tid < 0) continue;
+            if (params_.vac_max_len > 0.0 && std::max(b.get_size().x(), b.get_size().y()) > params_.vac_max_len) continue;
+            std::vector<Eigen::Vector3d> w;
+            for (int j : members[c]) {
+                if (!hag_.empty() && hag_[j] < params_.ground_band_m) continue;
+                for (const auto& p : voxelmap.lookup_voxel(j).voxel_points) w.push_back(cur_pose_ * p.head<3>());
+            }
+            if (w.size() < 3) continue;
+            if (static_cast<int>(w.size()) > params_.vac_max_pts) {
+                std::vector<Eigen::Vector3d> sub; const double st = static_cast<double>(w.size()) / params_.vac_max_pts;
+                for (double f = 0; f < w.size(); f += st) sub.push_back(w[static_cast<size_t>(f)]);
+                w.swap(sub);
+            }
+            auto& h = vac_hist_[tid];
+            const IcpEntry* ref = nullptr;                      // newest scan at least vac_gap_frames old
+            for (const auto& e : h) if (icp_frame_ - e.frame >= params_.vac_gap_frames) ref = &e;
+            if (ref && ref->pts.size() >= 3) {
+                const Eigen::Vector3d cs = mean_of(w), cr = mean_of(ref->pts);
+                const double disp = (cs - cr).head<2>().norm();
+                if (disp >= params_.vac_min_disp) {
+                    int vac = 0, occ = 0;
+                    for (const auto& pw : ref->pts) {
+                        const Eigen::Vector3d q = T_sensor_world * pw;
+                        const double d = q.norm();
+                        const int cc = std::min(cols - 1, static_cast<int>((std::atan2(q.y(), q.x()) + M_PI) / res));
+                        const int rr = std::min(rows - 1, std::max(0, static_cast<int>((std::atan2(q.z(), q.head<2>().norm()) + M_PI / 2.0) / res)));
+                        const float cur = cur_range_img_[rr * cols + cc];
+                        if (!std::isfinite(cur)) continue;                        // direction not observed now
+                        const double thr = std::max(params_.visibility_abs_thr, params_.visibility_rel_thr * d);
+                        if (cur > d + thr) ++vac;                                 // the scan now passes through the old point
+                        else if (cur >= d - thr) ++occ;                           // something is still there
+                    }
+                    // Most of the old object must be seen through: a static object that is merely
+                    // occluded now (e.g. a parked car seen from the side) leaves most points unknown.
+                    bool ok = vac >= params_.vac_min_pts && vac >= params_.vac_frac * (vac + occ) &&
+                              vac >= params_.vac_min_seen * static_cast<double>(ref->pts.size());
+                    // Constant-velocity check: the centroid half a gap ago must lie near the midpoint
+                    // (rejects tracks that jumped between two different clusters).
+                    if (ok && params_.vac_mid_tol > 0.0) {
+                        const IcpEntry* mid = nullptr;
+                        for (const auto& e : h) if (icp_frame_ - e.frame >= (icp_frame_ - ref->frame + 1) / 2) mid = &e;
+                        ok = false;
+                        if (mid && mid != ref && !mid->pts.empty()) {
+                            const double tfrac = static_cast<double>(mid->frame - ref->frame) / (icp_frame_ - ref->frame);
+                            const double dev = (mean_of(mid->pts) - (cr + tfrac * (cs - cr))).head<2>().norm();
+                            ok = dev <= params_.vac_mid_tol * disp + 0.1;
+                        }
+                    }
+                    if (ok) vac_state[c] = 1;
+                }
+            }
+            h.push_back({icp_frame_, cur_stamp_, std::move(w)});
+            while (h.size() > static_cast<size_t>(params_.vac_gap_frames + 3)) h.pop_front();
+        }
+        for (auto it = vac_hist_.begin(); it != vac_hist_.end();)
+            if (it->second.empty() || icp_frame_ - it->second.back().frame > 20) it = vac_hist_.erase(it); else ++it;
+    }
+
     // Scale the propagation threshold with robot motion.
     const double eff_prop_threshold =
         params_.cluster_propagation_threshold
@@ -1197,7 +1301,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         const double ratio = static_cast<double>(dynamic_count[c]) / total_count[c];
         // Strong-motion evidence is computed for locked clusters too, so the tracker
         // can release a PERMANENT_STATIC track that starts moving.
-        cluster_bboxes[c].set_strong_motion(ratio > unlock_threshold);
+        cluster_bboxes[c].set_strong_motion(ratio > unlock_threshold || vac_state[c]);
         {
             const double vm = vis_sum[c] / total_count[c];
             const double sp = std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed());
@@ -1230,6 +1334,8 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
                             : (ratio > eff_prop_threshold && tall && moving && seen_free);
         // ICP verdict overrides the voxel ratio for vehicle-sized clusters (when available).
         if (params_.icp_enable && large && icp_state[c] >= 0) is_dyn = icp_state[c] == 1 && tall;
+        // Vacated-space evidence confirms the cluster on its own.
+        if (vac_state[c] && (tall || !params_.vac_require_tall)) is_dyn = true;
         // Fast confirmation: very strong evidence in this frame -> remove now, without waiting
         // for the hysteresis (the tracker still counts it as one confirmed frame).
         if (is_dyn && params_.fast_confirm_ratio_factor > 0.0 &&

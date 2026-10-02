@@ -68,6 +68,16 @@ public:
     double foot_min_hag;
     // Point-level refinement (final step)
     double point_ground_cut;              ///< Points of dynamic voxels lower than this above the local ground stay static (<= 0 = off).
+    bool   vac_enable;                    ///< Vacated-space evidence: the track moved and the place it occupied vac_gap_frames ago is now seen through.
+    int    vac_gap_frames;                ///< Age of the reference scan (frames).
+    double vac_min_disp;                  ///< Minimum XY displacement of the track centroid over the gap (m).
+    double vac_frac;                      ///< Minimum fraction of the old points that are now seen through.
+    int    vac_min_pts;                   ///< Minimum number of old points seen through.
+    double vac_min_seen;                  ///< Minimum fraction of ALL the old points that are now seen through (occluded ones count against).
+    int    vac_max_pts;                   ///< Points stored per track and frame.
+    double vac_mid_tol;                   ///< > 0: constant-velocity check, max deviation of the mid-gap centroid from the midpoint (fraction of the displacement, + 0.1 m).
+    bool   vac_require_tall;              ///< Apply min_obj_height to clusters confirmed by this test.
+    double vac_max_len;                   ///< Only clusters up to this XY extent (m); 0 = no limit.
     bool   icp_enable;                    ///< Motion of vehicle-sized clusters from ICP against the same track icp_gap_frames ago.
     double icp_min_len;                   ///< Clusters longer than this [m] keep an ICP point history.
     int    icp_gap_frames;
@@ -373,6 +383,7 @@ private:
     void fs_integrate(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
     void fs_integrate_points(const std::vector<Eigen::Vector4d>& pts, const Eigen::Isometry3d& T_world_sensor);
     void push_raw_range_image(const PreprocessedFrame::Ptr& frame);
+    std::vector<float> make_raw_range_image(const PreprocessedFrame::Ptr& frame) const;
     std::vector<float> hag_;
     std::vector<std::vector<uint8_t>> fs_pt_;     ///< Per voxel, per point: 1 if the free-space map says the point fills known free space.
     std::vector<char> motion_core_;
@@ -385,6 +396,8 @@ private:
     void collect_delay_candidates(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const std::vector<BoundingBox>& cluster_bboxes, Pending& p) const;
     void finalize_delayed(DynamicRejectionResult& result);
     struct IcpEntry { int frame; double stamp; std::vector<Eigen::Vector3d> pts; };
+    std::unordered_map<int, std::deque<IcpEntry>> vac_hist_;   ///< Per track: recent world-frame point sets (vacated-space test).
+    std::vector<float> cur_range_img_;                         ///< Range image of the current scan (built before the cluster decision when vac_enable).
     std::unordered_map<int, std::deque<IcpEntry>> icp_hist_;   ///< Per track: recent world-frame point sets.
     int icp_frame_ = 0;
     double cur_stamp_ = 0.0;
