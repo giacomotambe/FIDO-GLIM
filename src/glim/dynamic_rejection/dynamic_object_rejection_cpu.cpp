@@ -89,6 +89,8 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     ground_band_m                  = config.param<double>(k, "ground_band_m",                  0.25);
     ground_cell_m                  = config.param<double>(k, "ground_cell_m",                  2.0);
     min_obj_height                 = config.param<double>(k, "min_obj_height",                 0.5);
+    max_obj_bottom_hag             = config.param<double>(k, "max_obj_bottom_hag",             0.0);
+    max_obj_top_hag                = config.param<double>(k, "max_obj_top_hag",                0.0);
     min_obj_speed                  = config.param<double>(k, "min_obj_speed",                  0.3);
     frame_max_dynamic_frac         = config.param<double>(k, "frame_max_dynamic_frac",         0.10);
     inflated_requires_evidence     = config.param<bool>  (k, "inflated_requires_evidence",     true);
@@ -429,10 +431,25 @@ void DynamicObjectRejectionCPU::index_voxel_bboxes(
     voxel_bboxes_.assign(nvox, {});
     if (n_clusters == 0) return;
 
+    // Conservative bounding spheres: most (voxel, box) pairs are rejected with one distance test.
+    std::vector<Eigen::Vector3d> bc(n_clusters); std::vector<double> br2(n_clusters);
+    const double kmax = std::max({inflate_params_.v_fwd_k, inflate_params_.v_rear_k, inflate_params_.v_lat_k});
+    for (int c = 0; c < n_clusters; ++c) {
+        const auto& b = cluster_bboxes[c];
+        bc[c] = b.get_center();
+        const Eigen::Vector3d h = 0.5 * b.get_size();
+        double r = h.norm() + 0.5;
+        if (b.is_dynamic_bbox())
+            r = std::max(r, std::hypot((h.head<2>().norm() + inflate_params_.v_max_speed * kmax) * inflate_params_.ellipse_box_cover_scale * 1.1, h.z()) + 0.5);
+        br2[c] = r * r;
+    }
+
     parallel_for_voxels(nvox, params_.num_threads, [&](int j) {
         const auto& mean = voxelmap.lookup_voxel(j).mean;
         auto& out = voxel_bboxes_[j];
+        const Eigen::Vector3d m3 = mean.head<3>();
         for (int c = 0; c < n_clusters; ++c) {
+            if ((m3 - bc[c]).squaredNorm() > br2[c]) continue;
             const auto& b = cluster_bboxes[c];
             if (b.contains_parts(mean)) {
                 out.emplace_back(c, true);
@@ -986,7 +1003,22 @@ void DynamicObjectRejectionCPU::fs_integrate(const gtsam_points::DynamicVoxelMap
         if (last == fs_frame_) return false;
         v = fs_decayed(v, last) + 1.f; if (v > 60000.f) v = 60000.f; last = fs_frame_; return true;
     };
-    const auto mark_free = [&](int64_t k) { auto& cf = fs_map_[k]; bump(cf.free, cf.last_free); };
+    // Cells already marked free in this frame: neighbouring rays cross the same cells along most
+    // of their length, so a sensor-centred bitmap saves most of the hash-map lookups.
+    const int64_t ox = static_cast<int64_t>(std::floor(o.x() * inv)), oy = static_cast<int64_t>(std::floor(o.y() * inv)), oz = static_cast<int64_t>(std::floor(o.z() * inv));
+    const int64_t G = static_cast<int64_t>(std::ceil(params_.fs_max_range * inv)) + 2, GZ = std::min<int64_t>(G, static_cast<int64_t>(std::ceil(20.0 * inv)));
+    const int64_t nx = 2 * G + 1, nz = 2 * GZ + 1;
+    fs_seen_.assign(static_cast<size_t>((nx * nx * nz + 63) / 64), 0);
+    const auto mark_free = [&](int64_t x, int64_t y, int64_t z) {
+        const int64_t lx = x - ox + G, ly = y - oy + G, lz = z - oz + GZ;
+        if (lx >= 0 && lx < nx && ly >= 0 && ly < nx && lz >= 0 && lz < nz) {
+            const int64_t b = (lx * nx + ly) * nz + lz;
+            uint64_t& word = fs_seen_[b >> 6]; const uint64_t bit = uint64_t(1) << (b & 63);
+            if (word & bit) return;
+            word |= bit;
+        }
+        auto& cf = fs_map_[fs_pack(x, y, z)]; bump(cf.free, cf.last_free);
+    };
     int cnt = 0;
     for (int j = 0; j < nvox; ++j) {
         const auto& v = voxelmap.lookup_voxel(j);
@@ -1018,11 +1050,12 @@ void DynamicObjectRejectionCPU::fs_integrate(const gtsam_points::DynamicVoxelMap
             if (L <= 0.0) continue;
             const Eigen::Vector3d dir = (w - o) / d;
             if (!params_.fs_dda) {
-                int64_t prev = -1;
+                int64_t px = INT64_MIN, py = 0, pz = 0;
                 for (double t = 0.5 * res; t < L; t += 0.5 * res) {
-                    const int64_t k = fs_key(o + t * dir, inv);
-                    if (k == prev) continue;
-                    prev = k; mark_free(k);
+                    const Eigen::Vector3d q = (o + t * dir) * inv;
+                    const int64_t x = static_cast<int64_t>(std::floor(q.x())), y = static_cast<int64_t>(std::floor(q.y())), z = static_cast<int64_t>(std::floor(q.z()));
+                    if (x == px && y == py && z == pz) continue;
+                    px = x; py = y; pz = z; mark_free(x, y, z);
                 }
                 continue;
             }
@@ -1036,7 +1069,7 @@ void DynamicObjectRejectionCPU::fs_integrate(const gtsam_points::DynamicVoxelMap
                 else                      { step[a] = 0;  tmax[a] = std::numeric_limits<double>::infinity(); tdelta[a] = tmax[a]; }
             }
             for (int it = 0; it < 4096; ++it) {
-                mark_free(fs_pack(c.x(), c.y(), c.z()));
+                mark_free(c.x(), c.y(), c.z());
                 if (c == c_end) break;
                 int a = (tmax.x() < tmax.y()) ? (tmax.x() < tmax.z() ? 0 : 2) : (tmax.y() < tmax.z() ? 1 : 2);
                 if (tmax[a] > L) break;
@@ -1151,7 +1184,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     std::vector<int> dynamic_count(n_clusters, 0);
     std::vector<int> total_count  (n_clusters, 0);
     std::vector<double> vis_sum   (n_clusters, 0.0);
-    std::vector<std::vector<int>> members((params_.split_enable || params_.icp_enable || params_.vac_enable) ? n_clusters : 0);
+    std::vector<std::vector<int>> members((params_.split_enable || params_.icp_enable || params_.vac_enable || params_.max_obj_bottom_hag > 0.0 || params_.max_obj_top_hag > 0.0) ? n_clusters : 0);
 
     // Dynamic-wins multi-cluster assignment: a voxel contributes to ALL base bboxes containing it.
     for (int j = 0; j < nvox; ++j) {
@@ -1324,7 +1357,15 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         // Object-level plausibility: tall enough and coherently moving in the world frame.
         const double vis_mean = vis_sum[c] / total_count[c];
         const double speed    = std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed());
-        const bool tall   = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
+        bool tall = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
+        // Objects moving on the ground: a cluster floating above it (canopy, sign, upper part of
+        // a facade) or reaching too high is not one.
+        if ((params_.max_obj_bottom_hag > 0.0 || params_.max_obj_top_hag > 0.0) && !hag_.empty() && !members.empty()) {
+            float lo = std::numeric_limits<float>::infinity(), hi = -lo;
+            for (int j : members[c]) { lo = std::min(lo, hag_[j]); hi = std::max(hi, hag_[j]); }
+            if (std::isfinite(lo) && ((params_.max_obj_bottom_hag > 0.0 && lo > params_.max_obj_bottom_hag) ||
+                                      (params_.max_obj_top_hag > 0.0 && hi > params_.max_obj_top_hag))) tall = false;
+        }
         const bool moving = params_.min_obj_speed <= 0.0 || speed >= params_.min_obj_speed || vis_mean >= params_.moving_vis_alt;
         const bool seen_free = vis_mean >= params_.min_obj_vis || cluster_bboxes[c].get_center().head<2>().norm() > params_.min_obj_vis_max_range;   // free-space evidence required (parked cars: centroid shift only)
         // Vehicle-sized clusters (longer than large_box_len) need stronger evidence: they are
@@ -1728,14 +1769,38 @@ void DynamicObjectRejectionCPU::transfer_labels(const PreprocessedFrame::Ptr& ta
     if (result.dynamic_frame) for (const auto& p : result.dynamic_frame->points) { pts.push_back(p); dyn.push_back(1); }
     auto st = std::make_shared<PreprocessedFrame>(); auto dy = std::make_shared<PreprocessedFrame>();
     for (auto* o : {st.get(), dy.get()}) { o->stamp = target->stamp; o->scan_end_time = target->scan_end_time; o->k_neighbors = 0; }
-    const double r2 = params.label_transfer_radius * params.label_transfer_radius;
-    std::unique_ptr<gtsam_points::KdTree> tree;
-    if (!pts.empty()) tree = std::make_unique<gtsam_points::KdTree>(pts.data(), pts.size());
+    // A target point is dynamic when its nearest labelled point lies within the radius and is
+    // dynamic. Grid with cell = radius: only targets next to a dynamic point (few) need the
+    // nearest-point search, limited to the 27 cells around them.
+    const double rad = std::max(params.label_transfer_radius, 1e-3), r2 = rad * rad, inv = 1.0 / rad;
+    const auto cell_of = [inv](const Eigen::Vector4d& q) { return Eigen::Matrix<int64_t, 3, 1>(static_cast<int64_t>(std::floor(q.x() * inv)), static_cast<int64_t>(std::floor(q.y() * inv)), static_cast<int64_t>(std::floor(q.z() * inv))); };
+    const auto pack = [](int64_t x, int64_t y, int64_t z) { return ((x & 0x1FFFFF) << 42) | ((y & 0x1FFFFF) << 21) | (z & 0x1FFFFF); };
+    std::unordered_set<int64_t> near_dyn;                     // cells within one cell of a dynamic point
+    std::unordered_map<int64_t, std::vector<int>> grid;       // labelled points per cell
+    if (result.dynamic_frame && !result.dynamic_frame->points.empty()) {
+        grid.reserve(pts.size());
+        for (size_t i = 0; i < pts.size(); ++i) {
+            const auto c = cell_of(pts[i]);
+            grid[pack(c.x(), c.y(), c.z())].push_back(static_cast<int>(i));
+            if (dyn[i]) for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) for (int dz = -1; dz <= 1; ++dz) near_dyn.insert(pack(c.x() + dx, c.y() + dy, c.z() + dz));
+        }
+    }
     for (size_t i = 0; i < target->points.size(); ++i) {
         bool d = false;
-        if (tree) {
-            size_t k; double sq;
-            if (tree->knn_search(target->points[i].data(), 1, &k, &sq) && sq <= r2) d = dyn[k] != 0;
+        if (!near_dyn.empty()) {
+            const auto c = cell_of(target->points[i]);
+            if (near_dyn.count(pack(c.x(), c.y(), c.z()))) {
+                double best = r2; int bi = -1;
+                for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) for (int dz = -1; dz <= 1; ++dz) {
+                    const auto it = grid.find(pack(c.x() + dx, c.y() + dy, c.z() + dz));
+                    if (it == grid.end()) continue;
+                    for (int k : it->second) {
+                        const double sq = (pts[k].head<3>() - target->points[i].head<3>()).squaredNorm();
+                        if (sq <= best) { if (sq < best || bi < 0 || dyn[k] == 0) { best = sq; bi = k; } }
+                    }
+                }
+                d = bi >= 0 && dyn[bi] != 0;
+            }
         }
         auto& o = d ? *dy : *st;
         o.points.push_back(target->points[i]);
@@ -1827,16 +1892,21 @@ void DynamicObjectRejectionCPU::collect_points(
         dynamic_tim.reserve(total_pts / 8);
     }
 
+    // Hybrid extra points are dropped from the output, except when the output is only a label
+    // carrier (rej_input_points > 0: the caller transfers the labels to the odometry frame).
+    // There they must stay: beyond hybrid_min_range they are most of the labelled points.
+    const bool keep_extra = params_.rej_input_points > 0;
     const bool per_point = static_cast<int>(point_dyn_.size()) == nvox;
     for (int j = 0; j < nvox; ++j) {
         const auto& v = voxelmap.lookup_voxel(j);
         if (per_point && !point_dyn_[j].empty()) {
             for (size_t k = 0; k < v.voxel_points.size(); ++k) {
-                if (k < v.voxel_times.size() && std::isnan(v.voxel_times[k])) continue;   // hybrid extra point
+                const bool extra = k < v.voxel_times.size() && std::isnan(v.voxel_times[k]);
+                if (extra && !keep_extra) continue;   // hybrid extra point
                 const bool d = point_dyn_[j][k];
                 (d ? dynamic_pts : static_pts).push_back(v.voxel_points[k]);
                 if (k < v.voxel_intensities.size()) (d ? dynamic_int : static_int).push_back(v.voxel_intensities[k]);
-                if (k < v.voxel_times.size())       (d ? dynamic_tim : static_tim).push_back(v.voxel_times[k]);
+                if (k < v.voxel_times.size())       (d ? dynamic_tim : static_tim).push_back(extra ? 0.0 : v.voxel_times[k]);
             }
             continue;
         }
@@ -1847,12 +1917,13 @@ void DynamicObjectRejectionCPU::collect_points(
 
         bool has_extra = false;
         for (const double t : v.voxel_times) if (std::isnan(t)) { has_extra = true; break; }
-        if (has_extra) {   // hybrid extra points never reach the output frames
+        if (has_extra) {
             for (size_t k = 0; k < v.voxel_points.size(); ++k) {
-                if (k < v.voxel_times.size() && std::isnan(v.voxel_times[k])) continue;
+                const bool extra = k < v.voxel_times.size() && std::isnan(v.voxel_times[k]);
+                if (extra && !keep_extra) continue;
                 pts.push_back(v.voxel_points[k]);
                 if (k < v.voxel_intensities.size()) ints.push_back(v.voxel_intensities[k]);
-                if (k < v.voxel_times.size())       tims.push_back(v.voxel_times[k]);
+                if (k < v.voxel_times.size())       tims.push_back(extra ? 0.0 : v.voxel_times[k]);
             }
             continue;
         }

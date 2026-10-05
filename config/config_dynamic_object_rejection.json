@@ -58,6 +58,8 @@
     "ground_band_m": 0.25,
     "ground_cell_m": 2.0,
     "min_obj_height": 0.2,
+    "max_obj_bottom_hag": 1.5,
+    "max_obj_top_hag": 2.3,
     "min_obj_speed": 0.1,
     "frame_max_dynamic_frac": 0.1,
     "inflated_requires_evidence": true,
@@ -100,8 +102,8 @@
     "large_box_ratio": 0.7,
     "large_box_vis": 0.3,
     "vis_raw": true,
-    "vis_raw_max_range": 40.0,
-    "vis_raw_max_points": 30000,
+    "vis_raw_max_range": 70.0,
+    "vis_raw_max_points": 60000,
     "fs_raw": false,
     "pe_mode": 0,
     "pe_min_points": 2,
@@ -121,7 +123,7 @@
     "fs_flag_nb": false,
     "fs_dda": false,
     "fs_ray_stride": 4,
-    "fs_max_range": 22.0,
+    "fs_max_range": 60.0,
     "fs_margin": 0.3,
     "fs_margin_rel": 0.03,
     "point_refine_enabled": false,
@@ -135,7 +137,7 @@
     "visibility_min_filter": 1,
     "hybrid_enabled": true,
     "hybrid_min_range": 20.0,
-    "hybrid_max_range": 40.0,
-    "hybrid_max_points": 8000
+    "hybrid_max_range": 70.0,
+    "hybrid_max_points": 14000
   }
 }

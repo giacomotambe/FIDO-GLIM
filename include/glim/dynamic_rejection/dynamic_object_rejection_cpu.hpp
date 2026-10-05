@@ -58,6 +58,8 @@ public:
     double ground_band_m;                 ///< Voxels lower than this above the local ground are never dynamic unless inside a confirmed-dynamic bbox tall >= min_obj_height.
     double ground_cell_m;                 ///< XY cell size for the local ground height estimate.
     double min_obj_height;                ///< A cluster can turn dynamic only if its bbox is at least this tall [m].
+    double max_obj_bottom_hag;            ///< A cluster whose lowest voxel is higher than this above the local ground cannot turn dynamic [m] (0 = off).
+    double max_obj_top_hag;               ///< ... nor one whose highest voxel is higher than this [m] (0 = off).
     double min_obj_speed;                 ///< ... and its estimated world-frame speed is at least this [m/s] (0 = off).
     double frame_max_dynamic_frac;        ///< If more than this fraction of a frame is dynamic, keep only confirmed-dynamic bboxes (anomalous frame). >= 1 = off.
     bool   inflated_requires_evidence;
@@ -378,6 +380,7 @@ private:
     std::vector<float> fs_pow_;
     float fs_decayed(float v, uint32_t last) const;
     std::unordered_map<int64_t, FsCell> fs_map_;
+    std::vector<uint64_t> fs_seen_;   ///< Per-frame bitmap of cells already marked free (sensor-centred).
     uint32_t fs_frame_ = 0;
     void fs_query(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
     void fs_integrate(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
