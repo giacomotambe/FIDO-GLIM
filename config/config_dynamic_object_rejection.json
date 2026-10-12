@@ -137,7 +137,7 @@
     "visibility_min_filter": 1,
     "hybrid_enabled": true,
     "hybrid_min_range": 20.0,
-    "hybrid_max_range": 70.0,
-    "hybrid_max_points": 14000
+    "hybrid_max_range": 40.0,
+    "hybrid_max_points": 8000
   }
 }
