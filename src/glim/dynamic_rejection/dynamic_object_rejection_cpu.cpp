@@ -979,11 +979,11 @@ void DynamicObjectRejectionCPU::fs_integrate_points(const std::vector<Eigen::Vec
     if (fs_frame_ % 20 == 0) {
         const double keep2 = std::pow(params_.fs_max_range + 10.0, 2);
         auto sx = [](int64_t a) { return (a & 0x100000) ? a - 0x200000 : a; };
-        for (auto it = fs_map_.begin(); it != fs_map_.end();) {
-            const int64_t k = it->first;
+        boost::unordered::erase_if(fs_map_, [&](const auto& kv) {
+            const int64_t k = kv.first;
             const Eigen::Vector2d cxy((sx((k >> 42) & 0x1FFFFF) + 0.5) * res, (sx((k >> 21) & 0x1FFFFF) + 0.5) * res);
-            if ((cxy - o.head<2>()).squaredNorm() > keep2) it = fs_map_.erase(it); else ++it;
-        }
+            return (cxy - o.head<2>()).squaredNorm() > keep2;
+        });
     }
 }
 
@@ -1009,16 +1009,10 @@ void DynamicObjectRejectionCPU::fs_integrate(const gtsam_points::DynamicVoxelMap
     const int64_t G = static_cast<int64_t>(std::ceil(params_.fs_max_range * inv)) + 2, GZ = std::min<int64_t>(G, static_cast<int64_t>(std::ceil(20.0 * inv)));
     const int64_t nx = 2 * G + 1, nz = 2 * GZ + 1;
     fs_seen_.assign(static_cast<size_t>((nx * nx * nz + 63) / 64), 0);
-    const auto mark_free = [&](int64_t x, int64_t y, int64_t z) {
-        const int64_t lx = x - ox + G, ly = y - oy + G, lz = z - oz + GZ;
-        if (lx >= 0 && lx < nx && ly >= 0 && ly < nx && lz >= 0 && lz < nz) {
-            const int64_t b = (lx * nx + ly) * nz + lz;
-            uint64_t& word = fs_seen_[b >> 6]; const uint64_t bit = uint64_t(1) << (b & 63);
-            if (word & bit) return;
-            word |= bit;
-        }
-        auto& cf = fs_map_[fs_pack(x, y, z)]; bump(cf.free, cf.last_free);
-    };
+
+    // 1) Rays and endpoints (serial: the endpoint updates touch the map, they are few).
+    struct Ray { Eigen::Vector3d dir; double L; };
+    std::vector<Ray> rays;
     int cnt = 0;
     for (int j = 0; j < nvox; ++j) {
         const auto& v = voxelmap.lookup_voxel(j);
@@ -1047,8 +1041,31 @@ void DynamicObjectRejectionCPU::fs_integrate(const gtsam_points::DynamicVoxelMap
             }
             const double d = std::sqrt(d2);
             const double L = d - std::max(params_.fs_margin, params_.fs_margin_rel * d);
-            if (L <= 0.0) continue;
-            const Eigen::Vector3d dir = (w - o) / d;
+            if (L > 0.0) rays.push_back({(w - o) / d, L});
+        }
+    }
+
+    // 2) Ray traversal in parallel: each chunk lists the cells it is the first to mark free in this
+    // frame (shared bitmap, atomic test-and-set). Cells outside the bitmap are listed every time:
+    // bump() counts them once per frame anyway, so the result does not depend on the order.
+    const int n_chunks = std::max(1, std::min<int>(static_cast<int>(rays.size() / 256) + 1, 8 * std::max(1, params_.num_threads)));
+    std::vector<std::vector<int64_t>> free_cells(n_chunks);
+    parallel_for_voxels(n_chunks, params_.num_threads, [&](int ci) {
+        auto& out = free_cells[ci];
+        const auto mark_free = [&](int64_t x, int64_t y, int64_t z) {
+            const int64_t lx = x - ox + G, ly = y - oy + G, lz = z - oz + GZ;
+            if (lx >= 0 && lx < nx && ly >= 0 && ly < nx && lz >= 0 && lz < nz) {
+                const int64_t b = (lx * nx + ly) * nz + lz;
+                const uint64_t bit = uint64_t(1) << (b & 63);
+                uint64_t* word = &fs_seen_[b >> 6];
+                if (__atomic_load_n(word, __ATOMIC_RELAXED) & bit) return;
+                if (__atomic_fetch_or(word, bit, __ATOMIC_RELAXED) & bit) return;
+            }
+            out.push_back(fs_pack(x, y, z));
+        };
+        const size_t r0 = rays.size() * ci / n_chunks, r1 = rays.size() * (ci + 1) / n_chunks;
+        for (size_t r = r0; r < r1; ++r) {
+            const Eigen::Vector3d& dir = rays[r].dir; const double L = rays[r].L;
             if (!params_.fs_dda) {
                 int64_t px = INT64_MIN, py = 0, pz = 0;
                 for (double t = 0.5 * res; t < L; t += 0.5 * res) {
@@ -1076,16 +1093,20 @@ void DynamicObjectRejectionCPU::fs_integrate(const gtsam_points::DynamicVoxelMap
                 c[a] += step[a]; tmax[a] += tdelta[a];
             }
         }
-    }
+    });
+
+    // 3) Map update (serial).
+    for (const auto& cells : free_cells)
+        for (const int64_t k : cells) { auto& cf = fs_map_[k]; bump(cf.free, cf.last_free); }
     // Keep the map local.
     if (fs_frame_ % 20 == 0) {
         const double keep2 = std::pow(params_.fs_max_range + 10.0, 2);
         auto sx = [](int64_t a) { return (a & 0x100000) ? a - 0x200000 : a; };
-        for (auto it = fs_map_.begin(); it != fs_map_.end();) {
-            const int64_t k = it->first;
+        boost::unordered::erase_if(fs_map_, [&](const auto& kv) {
+            const int64_t k = kv.first;
             const Eigen::Vector2d cxy((sx((k >> 42) & 0x1FFFFF) + 0.5) * res, (sx((k >> 21) & 0x1FFFFF) + 0.5) * res);
-            if ((cxy - o.head<2>()).squaredNorm() > keep2) it = fs_map_.erase(it); else ++it;
-        }
+            return (cxy - o.head<2>()).squaredNorm() > keep2;
+        });
     }
 }
 

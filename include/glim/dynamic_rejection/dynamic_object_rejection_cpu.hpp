@@ -1,5 +1,6 @@
 #pragma once
 
+#include <boost/unordered/unordered_flat_map.hpp>
 #include <deque>
 #include <unordered_map>
 #include <utility>
@@ -381,7 +382,7 @@ private:
     struct FsCell { float free = 0.f, occ = 0.f; uint32_t last_free = 0, last_occ = 0; uint16_t near = 0; bool marked = false; };
     std::vector<float> fs_pow_;
     float fs_decayed(float v, uint32_t last) const;
-    std::unordered_map<int64_t, FsCell> fs_map_;
+    boost::unordered_flat_map<int64_t, FsCell> fs_map_;   ///< Open addressing: ~2M cells within fs_max_range + 10 m, updated every frame.
     std::vector<uint64_t> fs_seen_;   ///< Per-frame bitmap of cells already marked free (sensor-centred).
     uint32_t fs_frame_ = 0;
     void fs_query(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
