@@ -223,9 +223,11 @@ PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::Const
   }
 
   preprocessed->k_neighbors = params.k_correspondences;
-  if (params.dynamic_rejection_type == "NONE" || params.dynamic_rejection_type == "FILTERED") {
-    preprocessed->neighbors = find_neighbors(frame->points, frame->size(), params.k_correspondences);
-  }
+  // Always compute per-point k-NN: odometry backends that derive per-point covariances from
+  // this (e.g. CT-ICP, see odometry_estimation_ct.cpp) need it regardless of dynamic rejection
+  // mode. Previously this was skipped for "VOXEL"/"BBOX", which left CT-ICP without valid
+  // covariances and froze its pose estimate.
+  preprocessed->neighbors = find_neighbors(frame->points, frame->size(), params.k_correspondences);
 
   spdlog::trace("preprocessed: {} -> {} points", raw_points->size(), preprocessed->size());
 
