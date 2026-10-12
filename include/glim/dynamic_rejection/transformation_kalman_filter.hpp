@@ -58,6 +58,27 @@ public:
    */
   Eigen::Isometry3d update(const Eigen::Isometry3d& T_world_imu);
 
+  /**
+   * @brief SLAM update with the timestamp of the measured pose.
+   *
+   * Same as update(T_world_imu); the last two stamped poses are also kept to predict the pose of
+   * the scan being processed by the dynamic rejection when there is no IMU (see getFramePose()).
+   */
+  Eigen::Isometry3d update(const Eigen::Isometry3d& T_world_imu, double stamp);
+
+  /// Stamp of the scan the dynamic rejection is about to process.
+  void setFrameStamp(double stamp);
+
+  /**
+   * @brief Pose of the scan set with setFrameStamp(), used by the dynamic rejection.
+   *
+   * With IMU predictions (or before two stamped SLAM poses are available) this is getPose().
+   * Without IMU, getPose() stays at the last SLAM pose, which is one or more scans old when the
+   * rejection runs; the pose is instead extrapolated at constant velocity from the last two
+   * stamped SLAM poses to the scan stamp (at most max_extrapolation_ seconds ahead).
+   */
+  Eigen::Isometry3d getFramePose() const;
+
 private:
   static Eigen::Matrix3d skew(const Eigen::Vector3d& v);
 
@@ -81,6 +102,14 @@ private:
   Eigen::Matrix<double, 6, 6> R_;   // measurement noise (pos 3 + rot 3)
 
   Eigen::Vector3d gravity_;
+
+  // Constant-velocity prediction of the scan pose when there is no IMU
+  bool imu_used_ = false;                  // set by predict()
+  double frame_stamp_ = -1.0;              // stamp of the scan being processed (setFrameStamp)
+  int num_stamped_ = 0;                    // number of valid entries in stamped_poses_ (0..2)
+  double stamps_[2] = {0.0, 0.0};          // [0] older, [1] newer
+  Eigen::Isometry3d stamped_poses_[2] = {Eigen::Isometry3d::Identity(), Eigen::Isometry3d::Identity()};
+  static constexpr double max_extrapolation_ = 1.0;  // [s]
 
   mutable std::mutex mutex_;  // protects all state from concurrent access
 };

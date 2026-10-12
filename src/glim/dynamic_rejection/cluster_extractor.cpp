@@ -199,9 +199,9 @@ std::vector<BoundingBox> DynamicClusterExtractor::extract_clusters(
         const double dt = (last_stamp_ > 0.0 && stamp > last_stamp_) ? (stamp - last_stamp_) : 0.0;
         last_stamp_ = stamp;
 
-        // getPose() = T_world_sensor. Maps previous-sensor-frame quantities into the
+        // getFramePose() = T_world_sensor of the current scan. Maps previous-sensor-frame quantities into the
         // current sensor frame: T_cur^-1 * T_prev (was (T_cur * T_prev^-1)^-1, a world-frame delta).
-        const Eigen::Isometry3d cur_pose     = pose_kalman_filter_->getPose() * params_.T_imu_lidar;   // T_world_lidar
+        const Eigen::Isometry3d cur_pose     = pose_kalman_filter_->getFramePose() * params_.T_imu_lidar;   // T_world_lidar
         const Eigen::Isometry3d T_to_current = cur_pose.inverse() * last_pose_;
         last_pose_ = cur_pose;
 

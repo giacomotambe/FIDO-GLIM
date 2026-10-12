@@ -277,6 +277,8 @@ public:
     /// (nearest labelled point within label_transfer_radius; farther points stay static).
     static void transfer_labels(const PreprocessedFrame::Ptr& target, DynamicRejectionResult& result, const DynamicObjectRejectionParamsCPU& params);
     const DynamicObjectRejectionParamsCPU& params() const { return params_; }
+    /// Stamp of the scan about to be processed: selects the pose used by the whole pipeline (see PoseKalmanFilter::getFramePose()).
+    void set_frame_stamp(double stamp) { if (pose_kalman_filter_) pose_kalman_filter_->setFrameStamp(stamp); }
 
     // -----------------------------------------------------------------------
     // Accessors
@@ -433,7 +435,7 @@ private:
     std::shared_ptr<PoseKalmanFilter> pose_kalman_filter_;
     std::unique_ptr<CloudCovarianceEstimation> covariance_estimation_;
     Eigen::Isometry3d last_pose_;
-    Eigen::Isometry3d lidar_pose() const { return pose_kalman_filter_->getPose() * params_.T_imu_lidar; }
+    Eigen::Isometry3d lidar_pose() const { return pose_kalman_filter_->getFramePose() * params_.T_imu_lidar; }
 
     std::vector<BoundingBox> last_cluster_bboxes_;
 

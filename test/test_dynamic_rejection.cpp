@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <Eigen/Geometry>
 #include <glim/dynamic_rejection/bounding_box.hpp>
+#include <glim/dynamic_rejection/transformation_kalman_filter.hpp>
 
 using namespace glim;
 
@@ -76,11 +77,44 @@ static void test_pose_convention() {
   CHECK((T_to_current * p_prev_truth - p_cur).norm() < 1e-9);
 }
 
+// Without IMU, getFramePose() extrapolates the last two stamped SLAM poses at constant velocity
+// to the scan stamp; with IMU predictions it falls back to getPose().
+static void test_frame_pose_prediction() {
+  const auto pose = [](double x, double yaw) {
+    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+    T.linear() = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+    T.translation() = Eigen::Vector3d(x, 0.0, 0.0);
+    return T;
+  };
+
+  PoseKalmanFilter kf;
+  kf.update(pose(0.0, 0.0), 0.0);
+  kf.update(pose(1.0, 0.1), 0.1);
+  kf.setFrameStamp(0.3);   // two scans after the last SLAM pose
+  const Eigen::Isometry3d P = kf.getFramePose();
+  // Last step: 1 m forward and 0.1 rad in 0.1 s. Twice that step (scaled in the frame of the
+  // last pose) from pose(1, 0.1): heading 0.3 rad, position pose(1, 0.1) * (2, 0, 0).
+  CHECK(std::abs(Eigen::AngleAxisd(P.rotation()).angle() - 0.3) < 1e-9);
+  const Eigen::Vector3d expected = pose(1.0, 0.1) * Eigen::Vector3d(2.0, 0.0, 0.0);
+  CHECK((P.translation() - expected).norm() < 1e-9);
+
+  kf.setFrameStamp(10.0);  // beyond max_extrapolation_: capped, not 99 steps ahead
+  CHECK(kf.getFramePose().translation().norm() < 20.0);
+
+  PoseKalmanFilter kf_imu;
+  kf_imu.predict(ImuMeasurement{Eigen::Vector3d(0.0, 0.0, 9.81), Eigen::Vector3d::Zero(), 0.01});
+  kf_imu.update(pose(0.0, 0.0), 0.0);
+  kf_imu.update(pose(1.0, 0.1), 0.1);
+  kf_imu.setFrameStamp(0.3);
+  CHECK((kf_imu.getFramePose().matrix() - kf_imu.getPose().matrix()).norm() < 1e-12);
+}
+
 int main() {
   test_contains();
   test_contains_inflated();
   test_flags();
   test_pose_convention();
+  test_frame_pose_prediction();
   if (failures == 0) std::printf("All dynamic rejection tests passed\n");
   return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

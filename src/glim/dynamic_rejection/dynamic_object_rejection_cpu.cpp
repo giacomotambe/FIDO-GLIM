@@ -268,7 +268,7 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
         return result;
     }
 
-    // getPose() returns T_world_sensor. Points of the current scan are expressed in the
+    // getFramePose() returns T_world_sensor of the current scan. Points of the current scan are expressed in the
     // current sensor frame, so the transform that maps them into the previous sensor
     // frame is T_prev^-1 * T_cur (NOT T_cur * T_prev^-1, which is a world-frame delta
     // and only coincides with the correct one for small rotations / poses near the origin).

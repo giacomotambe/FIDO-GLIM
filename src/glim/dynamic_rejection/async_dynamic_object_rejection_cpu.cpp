@@ -89,6 +89,8 @@ void AsyncDynamicObjectRejection::run() {
             // Step 1: WallFilter — voxelize + mark wall voxels
             // ------------------------------------------------------------------
             auto t_wall = std::chrono::steady_clock::now();
+            // Pose of this scan for wall filter, clustering and rejection (predicted when there is no IMU).
+            dynamic_rejection_->set_frame_stamp(frame->stamp);
             // Hybrid density: the rejection works on the frame + far raw points; the output
             // frames contain only the original points (extra ones are dropped in reject()).
             const auto work = DynamicObjectRejectionCPU::make_rejection_frame(frame, dynamic_rejection_->params());

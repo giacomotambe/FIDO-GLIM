@@ -220,7 +220,7 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
             Eigen::Isometry3d T_delta_pose = Eigen::Isometry3d::Identity();
             if (pose_kalman_filter_) {
                 
-                Eigen::Isometry3d T_world_imu =  pose_kalman_filter_->getPose(); // Inverti per trasformare dal vecchio al nuovo frame
+                Eigen::Isometry3d T_world_imu =  pose_kalman_filter_->getFramePose(); // Inverti per trasformare dal vecchio al nuovo frame
                 T_delta_pose = last_pose_.inverse() * T_world_imu; // Delta tra il vecchio e il nuovo frame
                 last_pose_ = T_world_imu; // Aggiorna il last_pose_ con il nuovo frame
                 spdlog::debug("[wall_filter] obtained delta pose from Kalman filter: translation=({:.4f},{:.4f},{:.4f})",

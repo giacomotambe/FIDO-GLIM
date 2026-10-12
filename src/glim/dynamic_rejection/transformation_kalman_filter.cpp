@@ -1,5 +1,6 @@
 #include <glim/dynamic_rejection/transformation_kalman_filter.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <spdlog/spdlog.h>
 
@@ -55,6 +56,7 @@ void PoseKalmanFilter::predict(const ImuMeasurement& imu) {
   spdlog::debug("[KF] predict: dt={:.6f} acc=({:.3f},{:.3f},{:.3f}) gyro=({:.3f},{:.3f},{:.3f})",
     imu.dt, imu.acc.x(), imu.acc.y(), imu.acc.z(), imu.gyro.x(), imu.gyro.y(), imu.gyro.z());
 
+  imu_used_ = true;
   const double dt = imu.dt;
 
   // Current absolute orientation = orientation_at_reset_ * delta_orientation_
@@ -202,6 +204,54 @@ Eigen::Isometry3d PoseKalmanFilter::update(const Eigen::Isometry3d& T_world_imu)
   spdlog::debug("[KF] update: reset done, returning T_filtered");
   last_filtered_pose_ = T_filtered;
   return T_filtered;
+}
+
+Eigen::Isometry3d PoseKalmanFilter::update(const Eigen::Isometry3d& T_world_imu, double stamp) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (num_stamped_ > 0 && stamp < stamps_[1]) {
+      num_stamped_ = 0;  // time went backwards (e.g. bag restarted): start over
+    }
+    if (num_stamped_ == 0 || stamp > stamps_[1]) {
+      stamps_[0] = stamps_[1];
+      stamped_poses_[0] = stamped_poses_[1];
+      stamps_[1] = stamp;
+      stamped_poses_[1] = T_world_imu;
+      num_stamped_ = std::min(num_stamped_ + 1, 2);
+    }
+  }
+  return update(T_world_imu);
+}
+
+void PoseKalmanFilter::setFrameStamp(double stamp) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  frame_stamp_ = stamp;
+}
+
+Eigen::Isometry3d PoseKalmanFilter::getFramePose() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (imu_used_ || frame_stamp_ < 0.0 || num_stamped_ == 0) {
+    return last_filtered_pose_;
+  }
+  const Eigen::Isometry3d& T1 = stamped_poses_[1];
+  const double dt01 = stamps_[1] - stamps_[0];
+  if (num_stamped_ < 2 || dt01 <= 0.0) {
+    return T1;
+  }
+
+  // Constant velocity: repeat the last SLAM motion, scaled to the time between the last SLAM pose
+  // and the scan.
+  const double horizon = std::clamp(frame_stamp_ - stamps_[1], 0.0, max_extrapolation_);
+  const double alpha = horizon / dt01;
+  const Eigen::Isometry3d delta = stamped_poses_[0].inverse() * T1;
+  const Eigen::AngleAxisd rot(delta.rotation());
+
+  Eigen::Isometry3d step = Eigen::Isometry3d::Identity();
+  if (std::abs(rot.angle()) > 1e-12) {
+    step.linear() = Eigen::AngleAxisd(alpha * rot.angle(), rot.axis()).toRotationMatrix();
+  }
+  step.translation() = alpha * delta.translation();
+  return T1 * step;
 }
 
 }  // namespace glim
