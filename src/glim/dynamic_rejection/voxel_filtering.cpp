@@ -32,6 +32,8 @@ WallFilterConfig::WallFilterConfig() {
     ransac_confidence       = config.param<double>("wall_filter", "ransac_confidence",       0.99);
     wall_vertical_angle_deg = config.param<double>("wall_filter", "wall_vertical_angle_deg", 20.0);
     max_planes              = config.param<int>   ("wall_filter", "max_planes",              8);
+    wall_exclude_ground     = config.param<bool>  ("wall_filter", "wall_exclude_ground",     true);
+    wall_vertical_ransac    = config.param<bool>  ("wall_filter", "wall_vertical_ransac",    true);
     floor_ceiling_angle_deg = config.param<double>("wall_filter", "floor_ceiling_angle_deg", 2.0);
     floor_min_inliers          = config.param<int>   ("wall_filter", "floor_min_inliers",       20);
     wall_bbox_max_aspect_ratio = config.param<double>("wall_filter", "wall_bbox_max_aspect_ratio", 5.0);
@@ -112,17 +114,31 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
     std::vector<Eigen::Vector3d> centroids = extract_centroids(*voxelmap, nvox);
 
     // ------------------------------------------------------------------
-    // Step 3 – RANSAC iterativo sui centroidi
+    // Step 3a – Segmentazione del pavimento (prima dei muri)
+    // Il suolo non è un piano unico: con una soglia stretta la RANSAC lo
+    // estrae a fette orizzontali che occupano tutti i max_planes.
+    // ------------------------------------------------------------------
+    segment_ground(*voxelmap, nvox, centroids, result);
+
+    // ------------------------------------------------------------------
+    // Step 3b – RANSAC iterativo sui centroidi (non-ground se wall_exclude_ground)
     // Ad ogni iterazione il piano migliore viene estratto e i suoi inlier
     // rimossi dal set, permettendo di trovare più piani distinti.
     // ------------------------------------------------------------------
     std::vector<PlaneModel> all_planes;
-    std::vector<Eigen::Vector3d> remaining = centroids;
+    std::vector<Eigen::Vector3d> remaining;
+    if (config_.wall_exclude_ground) {
+        remaining.reserve(nvox);
+        for (int i = 0; i < nvox; ++i)
+            if (!voxelmap->lookup_voxel(i).is_ground) remaining.push_back(centroids[i]);
+    } else {
+        remaining = centroids;
+    }
 
     for (int p = 0; p < config_.max_planes; ++p) {
         if (static_cast<int>(remaining.size()) < config_.ransac_min_inliers) break;
         PlaneModel plane;
-        if (!ransac_once(remaining, plane)) break;
+        if (!ransac_once(remaining, plane, config_.wall_vertical_ransac)) break;
         all_planes.push_back(plane);
     }
 
@@ -142,11 +158,8 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
 
     spdlog::debug("[wall_filter] {} wall planes", result.wall_planes.size());
 
-    if (result.wall_planes.empty() && result.floor_planes.empty()) {
-        return result;
-    }
-
-
+    // Nessuna uscita anticipata senza muri: registry e outlier vanno
+    // aggiornati in ogni frame (il pavimento è già segmentato sopra).
 
     // ------------------------------------------------------------------
     // Step 5 – Marca i voxel-parete nella voxelmap
@@ -234,62 +247,6 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
     }
 
     // ------------------------------------------------------------------
-    // Step 5 – Floor voxel classification
-    // ------------------------------------------------------------------
-    if (config_.floor_polar_enabled) {
-        polar_floor_segmentation(*voxelmap, nvox, centroids);
-    } else {
-        const double lower_z = lowest_point_z(centroids) + config_.floor_height_threshold;
-        for (int i = 0; i < nvox; ++i) {
-            auto& voxel = voxelmap->lookup_voxel(i);
-            if (voxel.mean.z() < lower_z) voxel.is_ground = true;
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Step 5b – RANSAC floor plane sui voxel ground → bbox → recupera FN
-    // ------------------------------------------------------------------
-    {
-        std::vector<Eigen::Vector3d> ground_pts;
-        ground_pts.reserve(nvox / 4);
-        for (int i = 0; i < nvox; ++i)
-            if (voxelmap->lookup_voxel(i).is_ground)
-                ground_pts.push_back(centroids[i]);
-
-        auto floor_plane = ransac_floor_plane(ground_pts);
-        if (floor_plane) {
-            std::vector<Eigen::Vector3d> inliers;
-            inliers.reserve(ground_pts.size());
-            for (const auto& p : ground_pts)
-                if (floor_plane->distance(p) < config_.floor_ransac_inlier_threshold)
-                    inliers.push_back(p);
-
-            if (static_cast<int>(inliers.size()) >= config_.ransac_min_inliers) {
-                BoundingBox floor_bbox = build_wall_bbox(inliers, *floor_plane);
-                floor_bbox.inflate(config_.floor_ransac_inlier_threshold);
-
-                // Usa la bbox come filtro: è ground solo ciò che ci sta dentro.
-                // Prima azzera tutti i flag is_ground, poi riassegna solo gli inlier.
-                int kept = 0, removed = 0;
-                for (int i = 0; i < nvox; ++i) {
-                    auto& voxel = voxelmap->lookup_voxel(i);
-                    
-                    if (floor_bbox.contains(voxel.mean)) {
-                        voxel.is_ground = true;
-                        ++kept;
-                    } else {
-                        voxel.is_ground = false;
-                        ++removed;
-                    }
-                }
-                spdlog::debug("[wall_filter] floor RANSAC bbox: kept={} removed={} ground voxels",
-                              kept, removed);
-                result.floor_bboxes.push_back(floor_bbox);
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------
     // Step 6 – Wall bbox registry: mark voxels inside registered bboxes
     // ------------------------------------------------------------------
     std::vector<bool> empty_bboxes;
@@ -334,6 +291,67 @@ WallFilterResult WallFilter::filter(const PreprocessedFrame& frame) {
     }
 
     return result;
+}
+
+// ---------------------------------------------------------------------------
+void WallFilter::segment_ground(gtsam_points::DynamicVoxelMapCPU& voxelmap, int nvox,
+                                const std::vector<Eigen::Vector3d>& centroids, WallFilterResult& result) const
+{
+    // ------------------------------------------------------------------
+    // Step 5 – Floor voxel classification
+    // ------------------------------------------------------------------
+    if (config_.floor_polar_enabled) {
+        polar_floor_segmentation(voxelmap, nvox, centroids);
+    } else {
+        const double lower_z = lowest_point_z(centroids) + config_.floor_height_threshold;
+        for (int i = 0; i < nvox; ++i) {
+            auto& voxel = voxelmap.lookup_voxel(i);
+            if (voxel.mean.z() < lower_z) voxel.is_ground = true;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Step 5b – RANSAC floor plane sui voxel ground → bbox → recupera FN
+    // ------------------------------------------------------------------
+    {
+        std::vector<Eigen::Vector3d> ground_pts;
+        ground_pts.reserve(nvox / 4);
+        for (int i = 0; i < nvox; ++i)
+            if (voxelmap.lookup_voxel(i).is_ground)
+                ground_pts.push_back(centroids[i]);
+
+        auto floor_plane = ransac_floor_plane(ground_pts);
+        if (floor_plane) {
+            std::vector<Eigen::Vector3d> inliers;
+            inliers.reserve(ground_pts.size());
+            for (const auto& p : ground_pts)
+                if (floor_plane->distance(p) < config_.floor_ransac_inlier_threshold)
+                    inliers.push_back(p);
+
+            if (static_cast<int>(inliers.size()) >= config_.ransac_min_inliers) {
+                BoundingBox floor_bbox = build_wall_bbox(inliers, *floor_plane);
+                floor_bbox.inflate(config_.floor_ransac_inlier_threshold);
+
+                // Usa la bbox come filtro: è ground solo ciò che ci sta dentro.
+                // Prima azzera tutti i flag is_ground, poi riassegna solo gli inlier.
+                int kept = 0, removed = 0;
+                for (int i = 0; i < nvox; ++i) {
+                    auto& voxel = voxelmap.lookup_voxel(i);
+                    
+                    if (floor_bbox.contains(voxel.mean)) {
+                        voxel.is_ground = true;
+                        ++kept;
+                    } else {
+                        voxel.is_ground = false;
+                        ++removed;
+                    }
+                }
+                spdlog::debug("[wall_filter] floor RANSAC bbox: kept={} removed={} ground voxels",
+                              kept, removed);
+                result.floor_bboxes.push_back(floor_bbox);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +433,7 @@ PlaneModel WallFilter::refit_plane(const std::vector<Eigen::Vector3d>& pts,
 }
 
 // ---------------------------------------------------------------------------
-bool WallFilter::ransac_once(std::vector<Eigen::Vector3d>& pts, PlaneModel& best_plane) {
+bool WallFilter::ransac_once(std::vector<Eigen::Vector3d>& pts, PlaneModel& best_plane, bool vertical) {
     const int n = static_cast<int>(pts.size());
     if (n < 3) return false;
 
@@ -423,16 +441,32 @@ bool WallFilter::ransac_once(std::vector<Eigen::Vector3d>& pts, PlaneModel& best
 
     int              best_count = 0;
     std::vector<int> best_inliers;
+    const int        sample_size = vertical ? 2 : 3;
 
     for (int iter = 0; iter < config_.ransac_max_iterations; ++iter) {
-        // Campiona 3 punti distinti
-        int i0, i1, i2;
-        i0 = dist(rng_);
-        do { i1 = dist(rng_); } while (i1 == i0);
-        do { i2 = dist(rng_); } while (i2 == i0 || i2 == i1);
+        PlaneModel candidate;
+        if (vertical) {
+            // 2 punti distinti, normale orizzontale ⟂ al loro segmento in XY:
+            // un muro che occupa una frazione w dei voxel viene campionato con
+            // probabilità w^2 invece di w^3.
+            const int i0 = dist(rng_);
+            int i1;
+            do { i1 = dist(rng_); } while (i1 == i0);
+            const Eigen::Vector2d dxy = (pts[i1] - pts[i0]).head<2>();
+            const double len = dxy.norm();
+            if (len < config_.voxel_resolution) continue;  // degenerato
+            candidate.normal = Eigen::Vector3d(-dxy.y(), dxy.x(), 0.0) / len;
+            candidate.d      = -candidate.normal.dot(pts[i0]);
+        } else {
+            // Campiona 3 punti distinti
+            int i0, i1, i2;
+            i0 = dist(rng_);
+            do { i1 = dist(rng_); } while (i1 == i0);
+            do { i2 = dist(rng_); } while (i2 == i0 || i2 == i1);
 
-        PlaneModel candidate = fit_plane(pts[i0], pts[i1], pts[i2]);
-        if (candidate.normal.norm() < 0.5) continue;  // degenerato
+            candidate = fit_plane(pts[i0], pts[i1], pts[i2]);
+            if (candidate.normal.norm() < 0.5) continue;  // degenerato
+        }
 
         std::vector<int> inliers =
             find_inliers(pts, candidate, config_.ransac_inlier_threshold);
@@ -442,12 +476,12 @@ bool WallFilter::ransac_once(std::vector<Eigen::Vector3d>& pts, PlaneModel& best
             best_inliers = std::move(inliers);
             best_plane   = candidate;
 
-            // Terminazione adattiva: N = log(1-p) / log(1-w^3)
+            // Terminazione adattiva: N = log(1-p) / log(1-w^s), s = punti per ipotesi
             const double w      = static_cast<double>(best_count) / n;
-            const double w3     = w * w * w;
-            if (w3 > 1.0 - 1e-9) break;
+            const double ws     = std::pow(w, sample_size);
+            if (ws > 1.0 - 1e-9) break;
             const double n_iter = std::log(1.0 - config_.ransac_confidence)
-                                / std::log(1.0 - w3 + 1e-10);
+                                / std::log(1.0 - ws + 1e-10);
             if (iter + 1 >= static_cast<int>(std::ceil(n_iter))) break;
         }
     }
