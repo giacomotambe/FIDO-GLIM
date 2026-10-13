@@ -1806,6 +1806,7 @@ void DynamicObjectRejectionCPU::transfer_labels(const PreprocessedFrame::Ptr& ta
             if (dyn[i]) for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) for (int dz = -1; dz <= 1; ++dz) near_dyn.insert(pack(c.x() + dx, c.y() + dy, c.z() + dz));
         }
     }
+    std::vector<int> st_index(target->points.size(), -1);   // index of each target point in the static frame
     for (size_t i = 0; i < target->points.size(); ++i) {
         bool d = false;
         if (!near_dyn.empty()) {
@@ -1824,19 +1825,37 @@ void DynamicObjectRejectionCPU::transfer_labels(const PreprocessedFrame::Ptr& ta
             }
         }
         auto& o = d ? *dy : *st;
+        if (!d) st_index[i] = static_cast<int>(st->points.size());
         o.points.push_back(target->points[i]);
         if (i < target->intensities.size()) o.intensities.push_back(target->intensities[i]);
         if (i < target->times.size())       o.times.push_back(target->times[i]);
     }
     st->k_neighbors = target->k_neighbors;
     if (st->k_neighbors > 0 && !st->points.empty()) {
-        // same neighbour search as build_frame()
-        gtsam_points::KdTree kt(st->points.data(), st->points.size());
+        // k nearest neighbours within the static frame (same search as build_frame()). The target's own
+        // neighbours (preprocessing) are reused where they are all static: the k nearest static points are
+        // then exactly those. Only points next to a dynamic point need a new search.
         const int K = st->k_neighbors; st->neighbors.assign(st->points.size() * K, 0);
-        std::vector<size_t> ki(K); std::vector<double> kd(K);
-        for (size_t i = 0; i < st->points.size(); ++i) {
-            const size_t nf = kt.knn_search(st->points[i].data(), K, ki.data(), kd.data());
-            for (int k = 0; k < K; ++k) st->neighbors[i * K + k] = static_cast<int>(ki[std::min<size_t>(k, nf ? nf - 1 : 0)]);
+        const bool reuse = target->k_neighbors == K && target->neighbors.size() == target->points.size() * static_cast<size_t>(K);
+        std::vector<size_t> redo;
+        for (size_t i = 0; i < target->points.size(); ++i) {
+            const int si = st_index[i];
+            if (si < 0) continue;
+            bool ok = reuse;
+            for (int k = 0; ok && k < K; ++k) {
+                const int j = target->neighbors[i * K + k];
+                ok = j >= 0 && j < static_cast<int>(st_index.size()) && st_index[j] >= 0;
+                if (ok) st->neighbors[si * K + k] = st_index[j];
+            }
+            if (!ok) redo.push_back(si);
+        }
+        if (!redo.empty()) {
+            gtsam_points::KdTree kt(st->points.data(), st->points.size());
+            std::vector<size_t> ki(K); std::vector<double> kd(K);
+            for (const size_t i : redo) {
+                const size_t nf = kt.knn_search(st->points[i].data(), K, ki.data(), kd.data());
+                for (int k = 0; k < K; ++k) st->neighbors[i * K + k] = static_cast<int>(ki[std::min<size_t>(k, nf ? nf - 1 : 0)]);
+            }
         }
     }
     result.static_frame = st;
