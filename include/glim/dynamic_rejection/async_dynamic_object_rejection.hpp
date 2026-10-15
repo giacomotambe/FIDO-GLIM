@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <thread>
 #include <memory>
 
@@ -61,6 +62,12 @@ public:
     /// Drain and return all processed static frames.
     std::vector<glim::PreprocessedFrame::Ptr> get_results();
 
+    /// Hand each static frame to `callback` on the background thread as soon as it is ready,
+    /// instead of queuing it for get_results(). Set it before the first insert_frame().
+    void set_output_callback(std::function<void(const glim::PreprocessedFrame::Ptr&)> callback) {
+        output_callback_ = std::move(callback);
+    }
+
     /// Drain and return all processed dynamic-only frames.
     std::vector<glim::PreprocessedFrame::Ptr> get_dynamic_results();
 
@@ -99,6 +106,8 @@ private:
     std::shared_ptr<DynamicObjectRejectionCPU> dynamic_rejection_;
     std::shared_ptr<WallFilter>                wall_filter_;
     std::shared_ptr<DynamicClusterExtractor>   cluster_extractor_;
+
+    std::function<void(const glim::PreprocessedFrame::Ptr&)> output_callback_;
 };
 
 }  // namespace glim

@@ -156,12 +156,16 @@ void AsyncDynamicObjectRejection::run() {
 
             wall_result_queue.push_back(wf);
             const bool use_delayed = dynamic_rejection_->params().fut_delay > 0 && dynamic_rejection_->params().fut_output_delayed;
+            const auto emit_static = [this](const glim::PreprocessedFrame::Ptr& f) {
+                if (output_callback_) output_callback_(f);
+                else output_frame_queue.push_back(f);
+            };
             if (!use_delayed) {
-                output_frame_queue.push_back(dr.static_frame);
+                emit_static(dr.static_frame);
                 if (dr.dynamic_frame) dynamic_frame_queue.push_back(dr.dynamic_frame);
             } else if (dr.has_delayed) {
                 // Look-ahead mode: frames leave fut_delay frames late, refined with the following scans.
-                if (dr.delayed_static_frame) output_frame_queue.push_back(dr.delayed_static_frame);
+                if (dr.delayed_static_frame) emit_static(dr.delayed_static_frame);
                 if (dr.delayed_dynamic_frame && !dr.delayed_dynamic_frame->points.empty()) dynamic_frame_queue.push_back(dr.delayed_dynamic_frame);
             }
             cluster_bbox_queue_.push_back(cluster_bboxes);
