@@ -93,6 +93,7 @@ public:
     double cluster_ground_cell;
     // Fragmentation
     double eps_range_k;               ///< eps(r) = max(eps, eps_range_k * r): sparse far objects stay connected (0 = off).
+    bool   eps_range_vertical;        ///< Widen eps only along z (the ring gap), not in xy. Default: true
     double frag_merge_gap;            ///< Merge bboxes whose AABB gap <= frag_merge_gap + frag_merge_gap_k * r (< 0 = off).
     double frag_merge_gap_k;
     /// Track-level evidence accumulation: e <- decay*e + (frame_evidence - bias), confirmed when e >= on (on <= 0 = off).

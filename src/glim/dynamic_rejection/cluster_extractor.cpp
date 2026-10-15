@@ -88,6 +88,7 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     cluster_max_height            = config.param<double>("dynamic_cluster_extractor", "cluster_max_height",            4.0);
     cluster_ground_cell           = config.param<double>("dynamic_cluster_extractor", "cluster_ground_cell",           2.0);
     eps_range_k                   = config.param<double>("dynamic_cluster_extractor", "eps_range_k",                   0.0);
+    eps_range_vertical            = config.param<bool>  ("dynamic_cluster_extractor", "eps_range_vertical",            true);
     frag_merge_gap                = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap",                0.5);
     frag_merge_gap_k              = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap_k",              0.02);
     use_obb                       = config.param<bool>  ("dynamic_cluster_extractor", "use_obb",                       false);
@@ -316,18 +317,27 @@ DynamicClusterExtractor::cluster_voxels(
         if (params_.dbscan_voxel_hash) {
             std::vector<int> neighbors;
             const Eigen::Vector3i& c0 = coords[local_idx];
-            double e2 = eps2; int Rq = R;
+            double e2 = eps2; int Rq = R, Rz = R;
             // Range-scaled eps (sparse rings): widen the search only where k * range exceeds the base eps,
-            // so closer voxels keep exactly the fixed-eps neighbourhood.
+            // so closer voxels keep exactly the fixed-eps neighbourhood. eps_range_vertical: widen it only
+            // along z (the gap between rings is vertical; along a ring points stay dense), an ellipsoid
+            // with semi-axes eps and k * range that costs (2R+1)^2 (2Rz+1) cells instead of (2Rz+1)^3.
             const double e_range = params_.eps_range_k * active_cents[local_idx].head<2>().norm();
-            if (e_range > eps) {
-                e2 = e_range * e_range; Rq = std::max(R, static_cast<int>(std::ceil(e_range / voxel_res)));
+            const bool widen = e_range > eps;
+            if (widen) {
+                Rz = std::max(R, static_cast<int>(std::ceil(e_range / voxel_res)));
+                if (!params_.eps_range_vertical) { e2 = e_range * e_range; Rq = Rz; }
             }
-            for (int dx = -Rq; dx <= Rq; ++dx) for (int dy = -Rq; dy <= Rq; ++dy) for (int dz = -Rq; dz <= Rq; ++dz) {
+            const bool ellipsoid = widen && params_.eps_range_vertical;
+            const double inv_ez2 = ellipsoid ? 1.0 / (e_range * e_range) : 0.0;
+            for (int dx = -Rq; dx <= Rq; ++dx) for (int dy = -Rq; dy <= Rq; ++dy) for (int dz = -Rz; dz <= Rz; ++dz) {
                 if (!dx && !dy && !dz) continue;
                 auto it = cell_of.find(ckey(Eigen::Vector3i(c0.x() + dx, c0.y() + dy, c0.z() + dz)));
                 if (it == cell_of.end()) continue;
-                if ((active_cents[it->second] - active_cents[local_idx]).head<3>().squaredNorm() <= e2) neighbors.push_back(it->second);
+                const Eigen::Vector4d d = active_cents[it->second] - active_cents[local_idx];
+                const bool in = ellipsoid ? d.head<2>().squaredNorm() / eps2 + d.z() * d.z() * inv_ez2 <= 1.0
+                                          : d.head<3>().squaredNorm() <= e2;
+                if (in) neighbors.push_back(it->second);
             }
             return neighbors;
         }

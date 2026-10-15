@@ -43,7 +43,7 @@
     "cluster_max_range": 70.0,
     "cluster_max_height": 4.0,
     "cluster_ground_cell": 2.0,
-    "_comment_eps_range_k": "eps(r) = max(eps, k * r) beyond the range where k * r exceeds eps; k ~ 1.15 x vertical ring spacing [rad]: VLP-16 0.04, OS1-64 0.010, HDL-64 0.008, OS2-128 0.0035 (0 = fixed eps)",
+    "_comment_eps_range_k": "eps(r) = max(eps, k * r) beyond the range where k * r exceeds eps, along z only with eps_range_vertical (default); k ~ 1.15 x vertical ring spacing [rad]: VLP-16 0.04, OS1-64 0.010, HDL-64 0.008, OS2-128 0.0035 (0 = fixed eps)",
     "eps_range_k": 0.0,
     "frag_merge_gap": 0.5,
     "frag_merge_gap_k": 0.02,
