@@ -66,7 +66,7 @@
     "fast_confirm_ratio_factor": 2.0,
     "fast_confirm_min_vis": 0.2,
     "moving_vis_alt": 0.3,
-    "foot_min_hag": -1.0,
+    "foot_min_hag": 0.10,
     "point_ground_cut": 0.2,
     "point_ground_cut_k": 0.0,
     "point_ground_cut_min_range": 10.0,
@@ -138,6 +138,7 @@
     "hybrid_enabled": true,
     "hybrid_min_range": 20.0,
     "hybrid_max_range": 40.0,
-    "hybrid_max_points": 8000
+    "hybrid_max_points": 8000,
+    "locked_max_height": 2.5
   }
 }
