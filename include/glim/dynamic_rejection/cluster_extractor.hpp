@@ -30,6 +30,7 @@ struct Track {
     int             static_frames  = 0;   ///< Consecutive frames confirmed static by propagate_to_clusters()
     PermanentState  permanent_state = PermanentState::NONE;
     int             unlock_frames  = 0;
+    int             still_frames   = 0;   ///< Consecutive matched frames below permanent_release_speed while PERMANENT_DYNAMIC
     double          evidence = 0.0;       ///< Accumulated motion evidence (leaky sum of frame evidence - bias)
     int             hold = 0;             ///< Frames the confirmed-dynamic state is still held without new evidence   ///< Consecutive strong-motion frames while PERMANENT_STATIC
     Eigen::Vector3d velocity = Eigen::Vector3d::Zero();  ///< EMA-smoothed velocity [m/s] in current sensor frame
@@ -117,6 +118,8 @@ public:
     double assoc_size_weight;
     double frag_max_len, frag_max_wid, frag_max_hgt;  ///< A merged bbox must stay within these sorted dimensions [m].       ///< XY cell size of the local ground estimate used by cluster_max_height.     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
     int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
+    double permanent_release_speed;   ///< PERMANENT_DYNAMIC track whose window speed stays below this [m/s] ... 0 = never released. Default: 0
+    int    permanent_release_frames;  ///< ... for this many consecutive matched frames is released (object stopped). Default: 10
 };
 
 // ===========================================================================

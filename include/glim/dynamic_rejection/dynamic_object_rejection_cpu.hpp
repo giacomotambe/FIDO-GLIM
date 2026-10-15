@@ -61,6 +61,8 @@ public:
     double min_obj_height;                ///< A cluster can turn dynamic only if its bbox is at least this tall [m].
     double max_obj_bottom_hag;            ///< A cluster whose lowest voxel is higher than this above the local ground cannot turn dynamic [m] (0 = off).
     double max_obj_top_hag;               ///< ... nor one whose highest voxel is higher than this [m] (0 = off).
+    double locked_max_height;             ///< Locked-dynamic clusters with a box taller than this are not removed [m] (0 = off).
+    bool   locked_shape_check;            ///< Locked-dynamic clusters must still pass the object shape test (min height, height above ground).
     double min_obj_speed;                 ///< ... and its estimated world-frame speed is at least this [m/s] (0 = off).
     double frame_max_dynamic_frac;        ///< If more than this fraction of a frame is dynamic, keep only confirmed-dynamic bboxes (anomalous frame). >= 1 = off.
     bool   inflated_requires_evidence;

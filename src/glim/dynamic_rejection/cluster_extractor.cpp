@@ -72,6 +72,8 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     fast_track_speed              = config.param<double>("dynamic_cluster_extractor", "fast_track_speed",              0.0);
     fast_track_min_dynamic_frames = config.param<int>   ("dynamic_cluster_extractor", "fast_track_min_dynamic_frames", 1);
     permanent_unlock_frames       = config.param<int>   ("dynamic_cluster_extractor", "permanent_unlock_frames",       2);
+    permanent_release_speed       = config.param<double>("dynamic_cluster_extractor", "permanent_release_speed",       0.0);
+    permanent_release_frames      = config.param<int>   ("dynamic_cluster_extractor", "permanent_release_frames",      10);
     use_centroid_association      = config.param<bool>  ("dynamic_cluster_extractor", "use_centroid_association",      true);
     assoc_gate_base               = config.param<double>("dynamic_cluster_extractor", "assoc_gate_base",               0.8);
     assoc_gate_per_range          = config.param<double>("dynamic_cluster_extractor", "assoc_gate_per_range",          0.03);
@@ -909,6 +911,21 @@ void DynamicClusterExtractor::update_tracks(
         }
 
         t.center        = params_.use_centroid_association ? bboxes[p.b_idx].get_centroid() : bboxes[p.b_idx].get_center();
+        // A PERMANENT_DYNAMIC track that has stopped (window speed below permanent_release_speed for
+        // permanent_release_frames matched frames, e.g. a pedestrian standing still) goes back to the
+        // normal hysteresis. Objects that keep moving stay locked.
+        if (t.permanent_state == PermanentState::DYNAMIC && params_.permanent_release_speed > 0.0 && dt > 0.0) {
+            t.still_frames = bboxes[p.b_idx].get_window_speed() < params_.permanent_release_speed ? t.still_frames + 1 : 0;
+            if (t.still_frames >= params_.permanent_release_frames) {
+                t.permanent_state = PermanentState::NONE;
+                t.dynamic_frames  = 0;
+                t.static_frames   = 0;
+                t.still_frames    = 0;
+                t.evidence        = 0.0;   // frozen while locked: would keep is_confirmed() true
+                t.hold            = 0;
+                spdlog::debug("[tracker] track={} PERMANENT_DYNAMIC released (stopped)", t.id);
+            }
+        }
         // Permanent state overrides the hysteresis counter.
         if (t.permanent_state == PermanentState::DYNAMIC) {
             bboxes[p.b_idx].set_dynamic(true);

@@ -91,6 +91,8 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     min_obj_height                 = config.param<double>(k, "min_obj_height",                 0.5);
     max_obj_bottom_hag             = config.param<double>(k, "max_obj_bottom_hag",             0.0);
     max_obj_top_hag                = config.param<double>(k, "max_obj_top_hag",                0.0);
+    locked_shape_check             = config.param<bool>  (k, "locked_shape_check",             false);
+    locked_max_height              = config.param<double>(k, "locked_max_height",              0.0);
     min_obj_speed                  = config.param<double>(k, "min_obj_speed",                  0.3);
     frame_max_dynamic_frac         = config.param<double>(k, "frame_max_dynamic_frac",         0.10);
     inflated_requires_evidence     = config.param<bool>  (k, "inflated_requires_evidence",     true);
@@ -1348,6 +1350,19 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     for (int c = 0; c < n_clusters; ++c)
         was_dynamic[c] = cluster_bboxes[c].is_dynamic_bbox();
 
+    // Object shape: tall enough, standing on the ground and not reaching too high. A cluster floating
+    // above the ground (canopy, sign, upper part of a facade) or reaching too high is not an object
+    // moving on the ground.
+    const auto object_shape_ok = [&](int c) {
+        if (cluster_bboxes[c].get_size().z() < params_.min_obj_height) return false;
+        if ((params_.max_obj_bottom_hag > 0.0 || params_.max_obj_top_hag > 0.0) && !hag_.empty() && !members.empty()) {
+            float lo = std::numeric_limits<float>::infinity(), hi = -lo;
+            for (int j : members[c]) { lo = std::min(lo, hag_[j]); hi = std::max(hi, hag_[j]); }
+            if (std::isfinite(lo) && ((params_.max_obj_bottom_hag > 0.0 && lo > params_.max_obj_bottom_hag) ||
+                                      (params_.max_obj_top_hag > 0.0 && hi > params_.max_obj_top_hag))) return false;
+        }
+        return true;
+    };
     for (int c = 0; c < n_clusters; ++c) {
         cluster_bboxes[c].set_strong_motion(false);
         if (total_count[c] == 0) continue;
@@ -1369,6 +1384,17 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         }
 
         if (cluster_bboxes[c].is_locked()) {
+            // A track locked dynamic can be handed over to static structure (a pedestrian walking past a
+            // column, the track then follows the column). With locked_shape_check the lock does not override
+            // the object shape: a locked cluster that is not person/vehicle-like is not removed this frame.
+            // locked_max_height: the same with the box height only (the height above ground can be wrong
+            // under a car, where the ground is occluded).
+            if (cluster_bboxes[c].is_dynamic_bbox() &&
+                ((params_.locked_shape_check && !object_shape_ok(c)) ||
+                 (params_.locked_max_height > 0.0 && cluster_bboxes[c].get_size().z() > params_.locked_max_height))) {
+                cluster_bboxes[c].set_dynamic(false);
+                was_dynamic[c] = false;
+            }
             spdlog::debug("[dynamic_rejection] cluster {} LOCKED -> {} (ratio {:.1f}%, strong={})",
                           c, cluster_bboxes[c].is_dynamic_bbox() ? "DYNAMIC" : "static",
                           ratio * 100.0, cluster_bboxes[c].has_strong_motion());
@@ -1378,15 +1404,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
         // Object-level plausibility: tall enough and coherently moving in the world frame.
         const double vis_mean = vis_sum[c] / total_count[c];
         const double speed    = std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed());
-        bool tall = cluster_bboxes[c].get_size().z() >= params_.min_obj_height;
-        // Objects moving on the ground: a cluster floating above it (canopy, sign, upper part of
-        // a facade) or reaching too high is not one.
-        if ((params_.max_obj_bottom_hag > 0.0 || params_.max_obj_top_hag > 0.0) && !hag_.empty() && !members.empty()) {
-            float lo = std::numeric_limits<float>::infinity(), hi = -lo;
-            for (int j : members[c]) { lo = std::min(lo, hag_[j]); hi = std::max(hi, hag_[j]); }
-            if (std::isfinite(lo) && ((params_.max_obj_bottom_hag > 0.0 && lo > params_.max_obj_bottom_hag) ||
-                                      (params_.max_obj_top_hag > 0.0 && hi > params_.max_obj_top_hag))) tall = false;
-        }
+        const bool tall = object_shape_ok(c);
         const bool moving = params_.min_obj_speed <= 0.0 || speed >= params_.min_obj_speed || vis_mean >= params_.moving_vis_alt;
         const bool seen_free = vis_mean >= params_.min_obj_vis || cluster_bboxes[c].get_center().head<2>().norm() > params_.min_obj_vis_max_range;   // free-space evidence required (parked cars: centroid shift only)
         // Vehicle-sized clusters (longer than large_box_len) need stronger evidence: they are
