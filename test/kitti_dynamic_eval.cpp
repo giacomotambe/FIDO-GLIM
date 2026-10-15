@@ -313,9 +313,11 @@ int main(int argc, char** argv) {
     if (own_input) write_pred(fs::path(out_dir) / "rej" / (std::string(name) + ".pred"), dr_rej);
     if (diag && own_input) {
       // Per point of the rejection input: bit0 labelled dynamic, bit1 inside a cluster box,
-      // bit2 inside a box judged dynamic in this frame (before the temporal confirmation).
+      // bit2 inside a box judged dynamic in this frame (before the temporal confirmation);
+      // bits 3/4/5: its wall-filter voxel is marked wall / ground / outlier.
       std::ofstream ofs(fs::path(out_dir) / "rej" / (std::string(name) + ".diag"), std::ios::binary);
       std::vector<std::pair<int32_t, uint8_t>> rows;
+      const double inv_res = wf.voxelmap ? 1.0 / wf.voxelmap->leaf_size() : 0.0;
       const auto add = [&](const PreprocessedFrame::Ptr& f, uint8_t lab) {
         if (!f) return;
         for (const auto& p : f->points) {
@@ -325,11 +327,26 @@ int main(int argc, char** argv) {
           for (const auto& b : cluster_bboxes) {
             if (b.contains(p)) { flags |= 2; if (b.is_dynamic_bbox()) flags |= 4; }
           }
+          if (wf.voxelmap) {
+            const Eigen::Vector3i c = (p.head<3>() * inv_res).array().floor().cast<int>();
+            const int vi = wf.voxelmap->lookup_voxel_index(c);
+            if (vi >= 0) {
+              const auto& v = wf.voxelmap->lookup_voxel(vi);
+              flags |= (v.is_wall ? 8 : 0) | (v.is_ground ? 16 : 0) | (v.is_outlier ? 32 : 0);
+            }
+          }
           rows.emplace_back(it->second, flags);
         }
       };
       add(dr_rej.static_frame, 0);
       add(dr_rej.dynamic_frame, 1);
+      // Cluster boxes of this frame: track id, locked, dynamic, window speed, EMA speed, center, size.
+      std::ofstream bx(fs::path(out_dir) / "rej" / (std::string(name) + ".boxes"));
+      for (const auto& b : cluster_bboxes) {
+        const auto& c = b.get_center(); const auto& z = b.get_size();
+        bx << b.get_track_id() << ' ' << b.is_locked() << ' ' << b.is_dynamic_bbox() << ' ' << b.get_window_speed() << ' ' << b.get_speed_xy()
+           << ' ' << c.x() << ' ' << c.y() << ' ' << c.z() << ' ' << z.x() << ' ' << z.y() << ' ' << z.z() << '\n';
+      }
       const int32_t cnt = static_cast<int32_t>(rows.size());
       ofs.write(reinterpret_cast<const char*>(&cnt), 4);
       for (const auto& [idx, fl] : rows) {
