@@ -315,9 +315,11 @@ DynamicClusterExtractor::cluster_voxels(
             std::vector<int> neighbors;
             const Eigen::Vector3i& c0 = coords[local_idx];
             double e2 = eps2; int Rq = R;
-            if (params_.eps_range_k > 0.0) {
-                const double e = std::max(eps, params_.eps_range_k * active_cents[local_idx].head<2>().norm());
-                e2 = e * e; Rq = std::max(R, static_cast<int>(std::ceil(e / voxel_res)));
+            // Range-scaled eps (sparse rings): widen the search only where k * range exceeds the base eps,
+            // so closer voxels keep exactly the fixed-eps neighbourhood.
+            const double e_range = params_.eps_range_k * active_cents[local_idx].head<2>().norm();
+            if (e_range > eps) {
+                e2 = e_range * e_range; Rq = std::max(R, static_cast<int>(std::ceil(e_range / voxel_res)));
             }
             for (int dx = -Rq; dx <= Rq; ++dx) for (int dy = -Rq; dy <= Rq; ++dy) for (int dz = -Rq; dz <= Rq; ++dz) {
                 if (!dx && !dy && !dz) continue;
