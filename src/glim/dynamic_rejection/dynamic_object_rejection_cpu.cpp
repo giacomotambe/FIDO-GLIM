@@ -748,6 +748,37 @@ void DynamicObjectRejectionCPU::compute_ground_heights(const gtsam_points::Dynam
 // point now occupies space that was observed free -> "appeared" (dynamic evidence).
 // Only this direction is used: "farther than before" can be mere disocclusion.
 
+// (2F+1) x (2F+1) minimum filter, columns wrapping around (azimuth), rows clipped. Separable: the
+// minimum over the box is the minimum over rows of the minimum over columns, so the result is the
+// same as the direct 2D loop at (2F+1) instead of (2F+1)^2 reads per cell.
+static std::vector<float> min_filter_range_image(const std::vector<float>& img, int rows, int cols, int F) {
+    if (F <= 0) return img;
+    std::vector<float> h(img.size());
+    for (int r = 0; r < rows; ++r) {
+        const float* in = &img[r * cols];
+        float* o = &h[r * cols];
+        for (int c = 0; c < cols; ++c) {
+            float m = in[c];
+            for (int dc = 1; dc <= F; ++dc) {
+                const int cl = c - dc < 0 ? c - dc + cols : c - dc, cr = c + dc >= cols ? c + dc - cols : c + dc;
+                m = std::min(m, std::min(in[cl], in[cr]));
+            }
+            o[c] = m;
+        }
+    }
+    std::vector<float> out(img.size());
+    for (int r = 0; r < rows; ++r) {
+        const int r0 = std::max(0, r - F), r1 = std::min(rows - 1, r + F);
+        float* o = &out[r * cols];
+        std::copy(&h[r0 * cols], &h[r0 * cols] + cols, o);
+        for (int rr = r0 + 1; rr <= r1; ++rr) {
+            const float* in = &h[rr * cols];
+            for (int c = 0; c < cols; ++c) o[c] = std::min(o[c], in[c]);
+        }
+    }
+    return out;
+}
+
 static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapCPU& vm, int rows, int cols, double res, int F) {
     std::vector<float> img(rows * cols, std::numeric_limits<float>::infinity());
     const int n = static_cast<int>(vm.gtsam_points::IncrementalVoxelMap<gtsam_points::DynamicGaussianVoxel>::num_voxels());
@@ -759,17 +790,7 @@ static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapC
             float& cell = img[r * cols + c];
             cell = std::min(cell, static_cast<float>(q.norm()));
         }
-    std::vector<float> out(rows * cols, std::numeric_limits<float>::infinity());
-    for (int r = 0; r < rows; ++r)
-        for (int c = 0; c < cols; ++c) {
-            float m = std::numeric_limits<float>::infinity();
-            for (int dr = -F; dr <= F; ++dr) {
-                const int rr = r + dr; if (rr < 0 || rr >= rows) continue;
-                for (int dc = -F; dc <= F; ++dc) m = std::min(m, img[rr * cols + (c + dc + cols) % cols]);
-            }
-            out[r * cols + c] = m;
-        }
-    return out;
+    return min_filter_range_image(img, rows, cols, F);
 }
 
 static std::vector<float> build_range_image_pts(const std::vector<Eigen::Vector4d>& pts, int rows, int cols, double res, int F, double rmax) {
@@ -784,17 +805,7 @@ static std::vector<float> build_range_image_pts(const std::vector<Eigen::Vector4
         float& cell = img[r * cols + c];
         cell = std::min(cell, static_cast<float>(std::sqrt(d2)));
     }
-    std::vector<float> out(rows * cols, std::numeric_limits<float>::infinity());
-    for (int r = 0; r < rows; ++r)
-        for (int c = 0; c < cols; ++c) {
-            float m = std::numeric_limits<float>::infinity();
-            for (int dr = -F; dr <= F; ++dr) {
-                const int rr = r + dr; if (rr < 0 || rr >= rows) continue;
-                for (int dc = -F; dc <= F; ++dc) m = std::min(m, img[rr * cols + (c + dc + cols) % cols]);
-            }
-            out[r * cols + c] = m;
-        }
-    return out;
+    return min_filter_range_image(img, rows, cols, F);
 }
 
 std::vector<float> DynamicObjectRejectionCPU::make_raw_range_image(const PreprocessedFrame::Ptr& frame) const {
