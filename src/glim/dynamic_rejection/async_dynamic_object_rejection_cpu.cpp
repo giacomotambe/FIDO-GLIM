@@ -20,6 +20,7 @@ AsyncDynamicObjectRejection::AsyncDynamicObjectRejection(
 AsyncDynamicObjectRejection::~AsyncDynamicObjectRejection() {
     spdlog::debug("[dynamic_rejection][async] dtor begin");
     kill_switch = true;
+    wake();
     join();
     spdlog::debug("[dynamic_rejection][async] dtor end");
 }
@@ -28,11 +29,18 @@ void AsyncDynamicObjectRejection::insert_frame(const glim::PreprocessedFrame::Pt
     spdlog::debug("[dynamic_rejection][async] insert_frame: queue_size={}",
                   input_frame_queue.size());
     input_frame_queue.push_back(frame);
+    wake();
+}
+
+void AsyncDynamicObjectRejection::wake() {
+    { std::lock_guard<std::mutex> lock(wake_mutex_); }
+    wake_cv_.notify_one();
 }
 
 void AsyncDynamicObjectRejection::join() {
     spdlog::debug("[dynamic_rejection][async] join begin");
     end_of_sequence = true;
+    wake();
     if (thread.joinable()) thread.join();
     spdlog::debug("[dynamic_rejection][async] join end");
 }
@@ -75,7 +83,11 @@ void AsyncDynamicObjectRejection::run() {
 
         if (frames.empty()) {
             if (end_of_sequence) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // Sleep until insert_frame() / join() / the destructor wakes us (the timeout is only a safety net).
+            // Polling every 10 ms made each scan wait 5 ms on average before the rejection.
+            std::unique_lock<std::mutex> lock(wake_mutex_);
+            wake_cv_.wait_for(lock, std::chrono::milliseconds(100),
+                              [this] { return kill_switch || end_of_sequence || !input_frame_queue.empty(); });
             continue;
         }
 

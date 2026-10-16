@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <functional>
 #include <thread>
 #include <memory>
@@ -90,11 +92,14 @@ public:
 
 private:
     void run();
+    void wake();   ///< Wake the rejection thread (new frame, end of sequence or shutdown).
 
 private:
     std::atomic_bool kill_switch;
     std::atomic_bool end_of_sequence;
     std::thread      thread;
+    std::mutex              wake_mutex_;   ///< Taken briefly before notifying, so no wake-up is lost.
+    std::condition_variable wake_cv_;
 
     ConcurrentVector<glim::PreprocessedFrame::Ptr> input_frame_queue;
     ConcurrentVector<glim::PreprocessedFrame::Ptr> output_frame_queue;
