@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <deque>
 #include <unordered_map>
@@ -384,7 +385,22 @@ private:
     struct FsCell { float free = 0.f, occ = 0.f; uint32_t last_free = 0, last_occ = 0; uint16_t near = 0; bool marked = false; };
     std::vector<float> fs_pow_;
     float fs_decayed(float v, uint32_t last) const;
-    boost::unordered_flat_map<int64_t, FsCell> fs_map_;   ///< Open addressing: ~2M cells within fs_max_range + 10 m, updated every frame.
+    /// Open addressing, ~2M cells within fs_max_range + 10 m, updated every frame. Split into shards by
+    /// key so the per-frame update and the clean-up run one shard per thread.
+    static constexpr int kFsShards = 8;
+    std::array<boost::unordered_flat_map<int64_t, FsCell>, kFsShards> fs_maps_;
+    /// Shard index from a splitmix64 finalizer, independent of the map's own hash mixing (sharding on the
+    /// same multiplicative hash leaves correlated keys in each shard and the map degrades).
+    static int fs_shard(int64_t key) {
+        uint64_t z = static_cast<uint64_t>(key);
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull; z = (z ^ (z >> 27)) * 0x94D049BB133111EBull; z ^= z >> 31;
+        return static_cast<int>(z & (kFsShards - 1));
+    }
+    FsCell& fs_cell(int64_t key) { return fs_maps_[fs_shard(key)][key]; }
+    const FsCell* fs_find(int64_t key) const {
+        const auto& m = fs_maps_[fs_shard(key)]; const auto it = m.find(key); return it == m.end() ? nullptr : &it->second;
+    }
+    void fs_prune(const Eigen::Vector3d& origin);
     std::vector<uint64_t> fs_seen_;   ///< Per-frame bitmap of cells already marked free (sensor-centred).
     uint32_t fs_frame_ = 0;
     void fs_query(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);
