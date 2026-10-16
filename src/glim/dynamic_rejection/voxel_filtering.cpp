@@ -390,6 +390,17 @@ PlaneModel WallFilter::fit_plane(const Eigen::Vector3d& p0,
 }
 
 // ---------------------------------------------------------------------------
+// Single inlier test, shared by find_inliers() and the counting in the RANSAC loops.
+static inline bool plane_inlier(const PlaneModel& plane, const Eigen::Vector3d& p, double threshold) {
+    return std::abs(plane.normal.dot(p) + plane.d) < threshold;
+}
+
+static int count_inliers(const std::vector<Eigen::Vector3d>& pts, const PlaneModel& plane, double threshold) {
+    int count = 0;
+    for (const auto& p : pts) count += plane_inlier(plane, p, threshold);
+    return count;
+}
+
 std::vector<int> WallFilter::find_inliers(
     const std::vector<Eigen::Vector3d>& pts,
     const PlaneModel& plane,
@@ -398,7 +409,7 @@ std::vector<int> WallFilter::find_inliers(
     std::vector<int> inliers;
     inliers.reserve(pts.size() / 4);
     for (int i = 0; i < static_cast<int>(pts.size()); ++i) {
-        if (std::abs(plane.normal.dot(pts[i]) + plane.d) < threshold)
+        if (plane_inlier(plane, pts[i], threshold))
             inliers.push_back(i);
     }
     return inliers;
@@ -468,12 +479,11 @@ bool WallFilter::ransac_once(std::vector<Eigen::Vector3d>& pts, PlaneModel& best
             if (candidate.normal.norm() < 0.5) continue;  // degenerato
         }
 
-        std::vector<int> inliers =
-            find_inliers(pts, candidate, config_.ransac_inlier_threshold);
+        // Count only; the inlier list is built once for the best hypothesis below.
+        const int count = count_inliers(pts, candidate, config_.ransac_inlier_threshold);
 
-        if (static_cast<int>(inliers.size()) > best_count) {
-            best_count   = static_cast<int>(inliers.size());
-            best_inliers = std::move(inliers);
+        if (count > best_count) {
+            best_count   = count;
             best_plane   = candidate;
 
             // Terminazione adattiva: N = log(1-p) / log(1-w^s), s = punti per ipotesi
@@ -487,6 +497,7 @@ bool WallFilter::ransac_once(std::vector<Eigen::Vector3d>& pts, PlaneModel& best
     }
 
     if (best_count < config_.ransac_min_inliers) return false;
+    best_inliers = find_inliers(pts, best_plane, config_.ransac_inlier_threshold);
 
     // Refit finale con tutti gli inlier
     best_plane = refit_plane(pts, best_inliers);
@@ -991,10 +1002,9 @@ std::optional<PlaneModel> WallFilter::ransac_floor_plane(
         PlaneModel cand = fit_plane(pts[i0], pts[i1], pts[i2]);
         if (std::abs(cand.normal.z()) < cos_thr) continue;  // troppo inclinato
 
-        auto inliers = find_inliers(pts, cand, config_.floor_ransac_inlier_threshold);
-        if (static_cast<int>(inliers.size()) > best_count) {
-            best_count   = static_cast<int>(inliers.size());
-            best_inliers = std::move(inliers);
+        const int count = count_inliers(pts, cand, config_.floor_ransac_inlier_threshold);
+        if (count > best_count) {
+            best_count   = count;
             best_plane   = cand;
 
             // Terminazione adattiva
@@ -1008,6 +1018,7 @@ std::optional<PlaneModel> WallFilter::ransac_floor_plane(
     }
 
     if (best_count < config_.ransac_min_inliers) return std::nullopt;
+    best_inliers = find_inliers(pts, best_plane, config_.floor_ransac_inlier_threshold);
     return refit_plane(pts, best_inliers);
 }
 
