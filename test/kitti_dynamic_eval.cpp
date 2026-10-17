@@ -342,10 +342,15 @@ int main(int argc, char** argv) {
       add(dr_rej.dynamic_frame, 1);
       // Cluster boxes of this frame: track id, locked, dynamic, window speed, EMA speed, center, size.
       std::ofstream bx(fs::path(out_dir) / "rej" / (std::string(name) + ".boxes"));
-      for (const auto& b : cluster_bboxes) {
+      // + decision inputs of the rejection: voxel ratio, free-space evidence, speed, flags (see ClusterDiag).
+      const auto& cdiag = rejection->cluster_diag();
+      for (size_t bi = 0; bi < cluster_bboxes.size(); ++bi) {
+        const auto& b = cluster_bboxes[bi];
         const auto& c = b.get_center(); const auto& z = b.get_size();
         bx << b.get_track_id() << ' ' << b.is_locked() << ' ' << b.is_dynamic_bbox() << ' ' << b.get_window_speed() << ' ' << b.get_speed_xy()
-           << ' ' << c.x() << ' ' << c.y() << ' ' << c.z() << ' ' << z.x() << ' ' << z.y() << ' ' << z.z() << '\n';
+           << ' ' << c.x() << ' ' << c.y() << ' ' << c.z() << ' ' << z.x() << ' ' << z.y() << ' ' << z.z();
+        if (bi < cdiag.size()) bx << ' ' << cdiag[bi].ratio << ' ' << cdiag[bi].vis << ' ' << cdiag[bi].speed << ' ' << int(cdiag[bi].flags);
+        bx << '\n';
       }
       const int32_t cnt = static_cast<int32_t>(rows.size());
       ofs.write(reinterpret_cast<const char*>(&cnt), 4);
