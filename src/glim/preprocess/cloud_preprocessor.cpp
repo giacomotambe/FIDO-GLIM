@@ -10,6 +10,8 @@
 #include <gtsam_points/util/parallelism.hpp>
 
 #include <glim/util/config.hpp>
+#include <numeric>
+#include <algorithm>
 #include <glim/util/convert_to_string.hpp>
 
 #ifdef GTSAM_POINTS_USE_TBB
@@ -28,6 +30,8 @@ CloudPreprocessorParams::CloudPreprocessorParams() {
   distance_near_thresh = config.param<double>("preprocess", "distance_near_thresh", 1.0);
   distance_far_thresh = config.param<double>("preprocess", "distance_far_thresh", 100.0);
   use_random_grid_downsampling = config.param<bool>("preprocess", "use_random_grid_downsampling", false);
+  use_uniform_downsampling = config.param<bool>("preprocess", "use_uniform_downsampling", false);
+  raw_points_target = config.param<int>("preprocess", "raw_points_target", 0);
   downsample_resolution = config.param<double>("preprocess", "downsample_resolution", 0.15);
   downsample_target = config.param<int>("preprocess", "random_downsample_target", 0);
   downsample_rate = config.param<double>("preprocess", "random_downsample_rate", 0.3);
@@ -42,6 +46,14 @@ CloudPreprocessorParams::CloudPreprocessorParams() {
 
 
   dynamic_rejection_type = ros_config.param<std::string>("glim_ros", "dynamic_rejection_type", "NONE");
+  // Keep the raw scan in the frame only if the voxel rejection uses it (hybrid density, raw range images / map).
+  {
+    Config rej_config(GlobalConfig::get_config_path("config_dynamic_object_rejection"));
+    keep_raw_points_for_rejection = dynamic_rejection_type != "NONE" &&
+                                    (rej_config.param<bool>("dynamic_object_rejection", "hybrid_enabled", true) ||
+                                     rej_config.param<bool>("dynamic_object_rejection", "vis_raw", false) ||
+                                     rej_config.param<bool>("dynamic_object_rejection", "fs_raw", false));
+  }
   if (enable_cropbox_filter) {
     Eigen::Isometry3d T_lidar_imu = sensor_config.param<Eigen::Isometry3d>("sensors", "T_lidar_imu", Eigen::Isometry3d::Identity());
     T_imu_lidar = T_lidar_imu.inverse();
@@ -91,8 +103,28 @@ PreprocessedFrame::Ptr CloudPreprocessor::preprocess(const RawPoints::ConstPtr& 
   return preprocessed;
 }
 
-PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::ConstPtr& raw_points) {
-  spdlog::trace("preprocessing input: {} points", raw_points->size());
+PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::ConstPtr& raw_points_in) {
+  spdlog::trace("preprocessing input: {} points", raw_points_in->size());
+
+  // Optional random reduction of the scan (the dynamic rejection was tuned with ~30k raw points and
+  // with the downsampled frame being a subset of its raw scan).
+  RawPoints::ConstPtr raw_points = raw_points_in;
+  if (params.raw_points_target > 0 && raw_points_in->size() > params.raw_points_target) {
+    std::vector<int> ix(raw_points_in->size());
+    std::iota(ix.begin(), ix.end(), 0);
+    std::shuffle(ix.begin(), ix.end(), mt);
+    ix.resize(params.raw_points_target);
+    auto r = std::make_shared<RawPoints>();
+    r->stamp = raw_points_in->stamp;
+    const bool has_i = raw_points_in->intensities.size() == raw_points_in->points.size();
+    const bool has_t = raw_points_in->times.size() == raw_points_in->points.size();
+    for (int k : ix) {
+      r->points.push_back(raw_points_in->points[k]);
+      if (has_i) r->intensities.push_back(raw_points_in->intensities[k]);
+      if (has_t) r->times.push_back(raw_points_in->times[k]);
+    }
+    raw_points = r;
+  }
 
   gtsam_points::PointCloudCPU::Ptr frame = std::make_shared<gtsam_points::PointCloudCPU>();
   frame->add_times(raw_points->times);
@@ -103,7 +135,12 @@ PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::Const
   PreprocessCallbacks::on_preprocessing_begin(frame);
 
   // Downsampling
-  if (params.use_random_grid_downsampling) {
+  if (params.use_uniform_downsampling) {
+    // Uniform random sampling: keeps the sensor's density profile (many points on near objects),
+    // which the dynamic object rejection relies on. The random grid below spreads points evenly in space.
+    const double rate = params.downsample_target > 0 ? static_cast<double>(params.downsample_target) / frame->size() : params.downsample_rate;
+    if (rate < 0.99) frame = gtsam_points::random_sampling(frame, rate, mt);
+  } else if (params.use_random_grid_downsampling) {
     const double rate = params.downsample_target > 0 ? static_cast<double>(params.downsample_target) / frame->size() : params.downsample_rate;
     frame = gtsam_points::randomgrid_sampling(frame, params.downsample_resolution, rate, mt, params.num_threads);
   } else {
@@ -181,10 +218,16 @@ PreprocessedFrame::Ptr CloudPreprocessor::preprocess_impl(const RawPoints::Const
     preprocessed->intensities.assign(frame->intensities, frame->intensities + frame->size());
   }
 
-  preprocessed->k_neighbors = params.k_correspondences;
-  if (params.dynamic_rejection_type == "NONE" || params.dynamic_rejection_type == "FILTERED") {
-    preprocessed->neighbors = find_neighbors(frame->points, frame->size(), params.k_correspondences);
+  if (params.keep_raw_points_for_rejection) {
+    preprocessed->raw_points = raw_points;   // used by the dynamic rejection (hybrid density)
   }
+
+  preprocessed->k_neighbors = params.k_correspondences;
+  // Always compute per-point k-NN: odometry backends that derive per-point covariances from
+  // this (e.g. CT-ICP, see odometry_estimation_ct.cpp) need it regardless of dynamic rejection
+  // mode. Previously this was skipped for "VOXEL"/"BBOX", which left CT-ICP without valid
+  // covariances and froze its pose estimate.
+  preprocessed->neighbors = find_neighbors(frame->points, frame->size(), params.k_correspondences);
 
   spdlog::trace("preprocessed: {} -> {} points", raw_points->size(), preprocessed->size());
 

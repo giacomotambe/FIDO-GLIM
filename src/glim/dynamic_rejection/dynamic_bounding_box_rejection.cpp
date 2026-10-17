@@ -22,6 +22,7 @@ DynamicBBoxRejection::DynamicBBoxRejection(const std::vector<BoundingBox>& bbox)
     Config config(GlobalConfig::get_config_path("config_bbox_rejection"));
     inflate_margin_  = config.param<double>("param_bbox_rejection", "inflate_margin",  0.0);
     max_bbox_frames_ = config.param<int>   ("param_bbox_rejection", "max_bbox_frames", 5);
+    num_threads_     = config.param<int>   ("param_bbox_rejection", "num_threads",     4);
     inflate_params_  = VelocityInflationParams::from_config();
     spdlog::info("DynamicBBoxRejection: inflate_margin={} max_bbox_frames={} v_fwd_k={} v_rear_k={} v_lat_k={} v_min={}",
         inflate_margin_, max_bbox_frames_,
@@ -131,7 +132,7 @@ void DynamicBBoxRejection::set_bounding_boxes(const std::vector<BoundingBox>& bb
 
 std::vector<int> DynamicBBoxRejection::find_neighbors(const Eigen::Vector4d* points, const int num_points, const int k) const {
   gtsam_points::KdTree tree(points, num_points);
-  int num_threads=4;
+  const int num_threads = num_threads_;
   std::vector<int> neighbors(num_points * k);
 
   const auto perpoint_task = [&](int i) {
