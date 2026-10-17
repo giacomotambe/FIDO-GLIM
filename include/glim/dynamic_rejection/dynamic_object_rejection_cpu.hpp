@@ -170,6 +170,8 @@ public:
     int    history_frames;           ///< Frames used by history suppression (= configured frame_num_memory).
     double visibility_max_incidence_deg;
     int    visibility_min_filter;         ///< Half-size of the min filter on past range images (1 = 3x3, 0 = none).
+    int    visibility_min_filter_rows;    ///< Its vertical half-size (rows); < 0 = same as visibility_min_filter. Sparse rings
+                                          ///< leave empty rows between them: ~ ring spacing / (2 x visibility_res_deg).
     double visibility_keep_frac;          ///< Outside every bbox, keep a voxel dynamic if >= this fraction of its points appeared in free space (> 1 = off).
     int    visibility_keep_min_points;    ///< ... and it has at least this many points.  ///< Ignore current points seen at grazing incidence (surface normal vs ray) above this angle.
     // World-frame dynamic evidence grid (temporal consistency independent of track IDs)
@@ -433,6 +435,14 @@ private:
     std::vector<std::vector<uint8_t>> vis_pt_;     ///< Per voxel, per point: 0 unknown, 1 appeared in free space, 2 consistent with the past.
     std::vector<std::vector<uint8_t>> point_dyn_;  ///< Per voxel, per point final label (empty = use voxel label).
     std::vector<BoundingBox> confirmed_bboxes_;    ///< Confirmed-dynamic bboxes of this frame.
+public:
+    /// Per-cluster decision inputs of the last frame (diagnostics). flags: 1 locked, 2 shape ok, 4 moving,
+    /// 8 seen free, 16 voxel ratio above threshold, 32 dynamic in this frame, 64 vacated space.
+    struct ClusterDiag { float ratio = 0.f, vis = 0.f, speed = 0.f; uint8_t flags = 0; };
+    const std::vector<ClusterDiag>& cluster_diag() const { return cluster_diag_; }
+    int vis_filter_rows() const { return std::max(0, params_.visibility_min_filter_rows >= 0 ? params_.visibility_min_filter_rows : params_.visibility_min_filter); }
+private:
+    std::vector<ClusterDiag> cluster_diag_;
     void split_ground_points(const gtsam_points::DynamicVoxelMapCPU& voxelmap);
     void refine_points(const gtsam_points::DynamicVoxelMapCPU& voxelmap);              ///< Per-voxel height above local ground [m].
     void compute_ground_heights(const gtsam_points::DynamicVoxelMapCPU& voxelmap);

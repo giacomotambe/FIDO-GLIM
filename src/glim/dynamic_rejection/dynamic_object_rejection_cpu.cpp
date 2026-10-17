@@ -184,6 +184,7 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     visibility_age_step            = config.param<int>   (k, "visibility_age_step",            1);
     visibility_max_incidence_deg   = config.param<double>(k, "visibility_max_incidence_deg",   75.0);
     visibility_min_filter          = config.param<int>   (k, "visibility_min_filter",          1);
+    visibility_min_filter_rows     = config.param<int>   (k, "visibility_min_filter_rows",     -1);
     visibility_keep_frac           = config.param<double>(k, "visibility_keep_frac",           2.0);
     visibility_keep_min_points     = config.param<int>   (k, "visibility_keep_min_points",     2);
     evidence_enabled               = config.param<bool>  (k, "evidence_enabled",               false);
@@ -237,7 +238,7 @@ DynamicObjectRejectionCPU::DynamicObjectRejectionCPU(
 // reject()  —  primary API
 // ===========================================================================
 
-static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapCPU& vm, int rows, int cols, double res, int F);
+static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapCPU& vm, int rows, int cols, double res, int F, int Fr);
 
 DynamicRejectionResult DynamicObjectRejectionCPU::reject(
     const WallFilterResult&         wf_result,
@@ -313,7 +314,7 @@ DynamicRejectionResult DynamicObjectRejectionCPU::reject(
         if (has_raw) cur_range_img_ = make_raw_range_image(source_frame);
         else {
             const double res = params_.visibility_res_deg * M_PI / 180.0;
-            cur_range_img_ = build_range_image(*wf_result.voxelmap, static_cast<int>(std::ceil(M_PI / res)), static_cast<int>(std::ceil(2.0 * M_PI / res)), res, std::max(0, params_.visibility_min_filter));
+            cur_range_img_ = build_range_image(*wf_result.voxelmap, static_cast<int>(std::ceil(M_PI / res)), static_cast<int>(std::ceil(2.0 * M_PI / res)), res, std::max(0, params_.visibility_min_filter), vis_filter_rows());
         }
     }
     propagate_to_clusters(*wf_result.voxelmap, cluster_bboxes, historical_bboxes);
@@ -764,11 +765,11 @@ void DynamicObjectRejectionCPU::compute_ground_heights(const gtsam_points::Dynam
 // point now occupies space that was observed free -> "appeared" (dynamic evidence).
 // Only this direction is used: "farther than before" can be mere disocclusion.
 
-// (2F+1) x (2F+1) minimum filter, columns wrapping around (azimuth), rows clipped. Separable: the
+// (2Fr+1) x (2F+1) minimum filter, columns wrapping around (azimuth), rows clipped. Separable: the
 // minimum over the box is the minimum over rows of the minimum over columns, so the result is the
 // same as the direct 2D loop at (2F+1) instead of (2F+1)^2 reads per cell.
-static std::vector<float> min_filter_range_image(const std::vector<float>& img, int rows, int cols, int F) {
-    if (F <= 0) return img;
+static std::vector<float> min_filter_range_image(const std::vector<float>& img, int rows, int cols, int F, int Fr) {
+    if (F <= 0 && Fr <= 0) return img;
     std::vector<float> h(img.size());
     for (int r = 0; r < rows; ++r) {
         const float* in = &img[r * cols];
@@ -784,7 +785,7 @@ static std::vector<float> min_filter_range_image(const std::vector<float>& img, 
     }
     std::vector<float> out(img.size());
     for (int r = 0; r < rows; ++r) {
-        const int r0 = std::max(0, r - F), r1 = std::min(rows - 1, r + F);
+        const int r0 = std::max(0, r - Fr), r1 = std::min(rows - 1, r + Fr);
         float* o = &out[r * cols];
         std::copy(&h[r0 * cols], &h[r0 * cols] + cols, o);
         for (int rr = r0 + 1; rr <= r1; ++rr) {
@@ -795,7 +796,7 @@ static std::vector<float> min_filter_range_image(const std::vector<float>& img, 
     return out;
 }
 
-static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapCPU& vm, int rows, int cols, double res, int F) {
+static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapCPU& vm, int rows, int cols, double res, int F, int Fr) {
     std::vector<float> img(rows * cols, std::numeric_limits<float>::infinity());
     const int n = static_cast<int>(vm.gtsam_points::IncrementalVoxelMap<gtsam_points::DynamicGaussianVoxel>::num_voxels());
     for (int v = 0; v < n; ++v)
@@ -806,10 +807,10 @@ static std::vector<float> build_range_image(const gtsam_points::DynamicVoxelMapC
             float& cell = img[r * cols + c];
             cell = std::min(cell, static_cast<float>(q.norm()));
         }
-    return min_filter_range_image(img, rows, cols, F);
+    return min_filter_range_image(img, rows, cols, F, Fr);
 }
 
-static std::vector<float> build_range_image_pts(const std::vector<Eigen::Vector4d>& pts, int rows, int cols, double res, int F, double rmax) {
+static std::vector<float> build_range_image_pts(const std::vector<Eigen::Vector4d>& pts, int rows, int cols, double res, int F, int Fr, double rmax) {
     std::vector<float> img(rows * cols, std::numeric_limits<float>::infinity());
     const double r2 = rmax * rmax;
     for (const auto& pt : pts) {
@@ -821,7 +822,7 @@ static std::vector<float> build_range_image_pts(const std::vector<Eigen::Vector4
         float& cell = img[r * cols + c];
         cell = std::min(cell, static_cast<float>(std::sqrt(d2)));
     }
-    return min_filter_range_image(img, rows, cols, F);
+    return min_filter_range_image(img, rows, cols, F, Fr);
 }
 
 std::vector<float> DynamicObjectRejectionCPU::make_raw_range_image(const PreprocessedFrame::Ptr& frame) const {
@@ -836,9 +837,9 @@ std::vector<float> DynamicObjectRejectionCPU::make_raw_range_image(const Preproc
         for (int k = 0; k < params_.vis_raw_max_points; ++k) std::swap(ix[k], ix[k + mt() % (ix.size() - k)]);
         std::vector<Eigen::Vector4d> sub; sub.reserve(params_.vis_raw_max_points);
         for (int k = 0; k < params_.vis_raw_max_points; ++k) sub.push_back(rp[ix[k]]);
-        return build_range_image_pts(sub, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range);
+        return build_range_image_pts(sub, rows, cols, res, std::max(0, params_.visibility_min_filter), vis_filter_rows(), params_.vis_raw_max_range);
     }
-    return build_range_image_pts(rp, rows, cols, res, std::max(0, params_.visibility_min_filter), params_.vis_raw_max_range);
+    return build_range_image_pts(rp, rows, cols, res, std::max(0, params_.visibility_min_filter), vis_filter_rows(), params_.vis_raw_max_range);
 }
 
 void DynamicObjectRejectionCPU::push_raw_range_image(const PreprocessedFrame::Ptr& frame) {
@@ -847,7 +848,7 @@ void DynamicObjectRejectionCPU::push_raw_range_image(const PreprocessedFrame::Pt
     const double res = params_.visibility_res_deg * M_PI / 180.0;
     const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res)), rows = static_cast<int>(std::ceil(M_PI / res));
     while (range_img_history_.size() + 1 < voxelmap_history_.size())
-        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter)));
+        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter), vis_filter_rows()));
     if (range_img_history_.size() + 1 == voxelmap_history_.size()) {
         // Reuse the image built for the vacated-space test of this scan, if any.
         if (!cur_range_img_.empty()) { range_img_history_.push_back(std::move(cur_range_img_)); cur_range_img_.clear(); }
@@ -868,7 +869,7 @@ void DynamicObjectRejectionCPU::compute_visibility(
 
     // Range images are cached per history entry (built once, in their own frame).
     while (range_img_history_.size() < voxelmap_history_.size())
-        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter)));
+        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter), vis_filter_rows()));
 
     const int hist = static_cast<int>(voxelmap_history_.size());
     std::vector<int> ages;
@@ -1299,6 +1300,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     // free-space evidence at their current position (moving away along the ray, entering
     // previously occluded space, following another object).
     std::vector<char> vac_state(n_clusters, 0);
+    cluster_diag_.assign(n_clusters, {});
     if (params_.vac_enable && !cur_range_img_.empty()) {
         const double res = params_.visibility_res_deg * M_PI / 180.0;
         const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res)), rows = static_cast<int>(std::ceil(M_PI / res));
@@ -1414,6 +1416,12 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
                                                  dynamic_count[c] == 0 && vm <= 0.0 && sp < params_.min_obj_speed);
         }
 
+        {
+            auto& cd = cluster_diag_[c];
+            cd.ratio = static_cast<float>(ratio); cd.vis = static_cast<float>(vis_sum[c] / total_count[c]);
+            cd.speed = static_cast<float>(std::max(cluster_bboxes[c].get_speed_xy(), cluster_bboxes[c].get_window_speed()));
+            cd.flags = (cluster_bboxes[c].is_locked() ? 1 : 0) | (vac_state[c] ? 64 : 0);
+        }
         if (cluster_bboxes[c].is_locked()) {
             // A track locked dynamic can be handed over to static structure (a pedestrian walking past a
             // column, the track then follows the column). With locked_shape_check the lock does not override
@@ -1453,6 +1461,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             ratio > params_.fast_confirm_ratio_factor * eff_prop_threshold && vis_mean >= params_.fast_confirm_min_vis)
             was_dynamic[c] = true;
         cluster_bboxes[c].set_dynamic(is_dyn);  // feedback for update_dynamic_feedback()
+        cluster_diag_[c].flags |= (tall ? 2 : 0) | (moving ? 4 : 0) | (seen_free ? 8 : 0) | (ratio > eff_prop_threshold ? 16 : 0) | (is_dyn ? 32 : 0);
         spdlog::debug("[dynamic_rejection] cluster {}: {}/{} dynamic ({:.1f}%) threshold={:.2f} -> {} (was {})",
                       c, dynamic_count[c], total_count[c], ratio * 100.0, eff_prop_threshold,
                       is_dyn ? "DYNAMIC" : "static", was_dynamic[c] ? "DYNAMIC" : "static");
@@ -1615,7 +1624,7 @@ void DynamicObjectRejectionCPU::finalize_delayed(DynamicRejectionResult& result)
     const double res = params_.visibility_res_deg * M_PI / 180.0;
     const int cols = static_cast<int>(std::ceil(2.0 * M_PI / res)), rows = static_cast<int>(std::ceil(M_PI / res));
     while (range_img_history_.size() < voxelmap_history_.size())
-        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter)));
+        range_img_history_.push_back(build_range_image(*voxelmap_history_[range_img_history_.size()], rows, cols, res, std::max(0, params_.visibility_min_filter), vis_filter_rows()));
     std::vector<int> idx; std::vector<Eigen::Isometry3d> T;
     for (int k = params_.fut_min_age; k <= D; k += std::max(1, params_.fut_age_step)) {
         const int h = H - 1 - (D - k);                  // history index of frame t+k (current frame t+D is last)
