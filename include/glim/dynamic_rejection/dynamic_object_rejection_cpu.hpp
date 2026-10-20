@@ -63,6 +63,10 @@ public:
     double max_obj_bottom_hag;            ///< A cluster whose lowest voxel is higher than this above the local ground cannot turn dynamic [m] (0 = off).
     double max_obj_top_hag;               ///< ... nor one whose highest voxel is higher than this [m] (0 = off).
     double locked_max_height;             ///< Locked-dynamic clusters with a box taller than this are not removed [m] (0 = off).
+    double locked_struct_frac;            ///< Locked-dynamic cluster whose points lie for at least this fraction on static structure
+                                          ///< (free-space map cells occupied for struct_min_age frames and not known free since) is
+                                          ///< not removed and reports no own motion, so the tracker can release it (0 = off).
+    int    struct_min_age;                ///< Frames a cell must have been occupied to count as static structure.
     bool   locked_shape_check;            ///< Locked-dynamic clusters must still pass the object shape test (min height, height above ground).
     double min_obj_speed;                 ///< ... and its estimated world-frame speed is at least this [m/s] (0 = off).
     double frame_max_dynamic_frac;        ///< If more than this fraction of a frame is dynamic, keep only confirmed-dynamic bboxes (anomalous frame). >= 1 = off.
@@ -382,9 +386,10 @@ private:
     std::deque<Eigen::Isometry3d> pose_history_;
     std::deque<Eigen::Isometry3d> abs_pose_history_;   ///< T_world_sensor of each voxelmap_history_ entry.
     std::vector<float> vis_frac_;
+    std::vector<float> struct_frac_;   ///< Per voxel fraction of points on static structure (fs_query).
     /// Local free-space map in the world frame (DUFOMap-like): per cell, number of frames in which a
     /// ray crossed it (free) or ended in it (occ). Long memory without keeping the past scans.
-    struct FsCell { float free = 0.f, occ = 0.f; uint32_t last_free = 0, last_occ = 0; uint16_t near = 0; bool marked = false; };
+    struct FsCell { float free = 0.f, occ = 0.f; uint32_t last_free = 0, last_occ = 0, first_occ = 0; uint16_t near = 0; bool marked = false; };
     std::vector<float> fs_pow_;
     float fs_decayed(float v, uint32_t last) const;
     /// Open addressing, ~2M cells within fs_max_range + 10 m, updated every frame. Split into shards by
@@ -403,6 +408,7 @@ private:
         const auto& m = fs_maps_[fs_shard(key)]; const auto it = m.find(key); return it == m.end() ? nullptr : &it->second;
     }
     void fs_prune(const Eigen::Vector3d& origin);
+    void fs_mark_first_occ(FsCell& c) const;
     std::vector<uint64_t> fs_seen_;   ///< Per-frame bitmap of cells already marked free (sensor-centred).
     uint32_t fs_frame_ = 0;
     void fs_query(const gtsam_points::DynamicVoxelMapCPU& voxelmap, const Eigen::Isometry3d& T_world_sensor);

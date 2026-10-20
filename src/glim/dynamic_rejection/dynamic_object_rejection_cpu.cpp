@@ -93,6 +93,8 @@ DynamicObjectRejectionParamsCPU::DynamicObjectRejectionParamsCPU() {
     max_obj_top_hag                = config.param<double>(k, "max_obj_top_hag",                0.0);
     locked_shape_check             = config.param<bool>  (k, "locked_shape_check",             false);
     locked_max_height              = config.param<double>(k, "locked_max_height",              0.0);
+    locked_struct_frac             = config.param<double>(k, "locked_struct_frac",             0.7);
+    struct_min_age                 = config.param<int>   (k, "struct_min_age",                 30);
     min_obj_speed                  = config.param<double>(k, "min_obj_speed",                  0.3);
     frame_max_dynamic_frac         = config.param<double>(k, "frame_max_dynamic_frac",         0.10);
     inflated_requires_evidence     = config.param<bool>  (k, "inflated_requires_evidence",     true);
@@ -942,11 +944,12 @@ void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU&
     if (static_cast<int>(vis_frac_.size()) != nvox) vis_frac_.assign(nvox, 0.f);
     const double res = params_.fs_res, inv = 1.0 / res, r2max = params_.fs_max_range * params_.fs_max_range;
     fs_pt_.assign(nvox, {});
+    struct_frac_.assign(nvox, 0.f);
     parallel_for_voxels(nvox, params_.num_threads, [&](int j) {
         const auto& v = voxelmap.lookup_voxel(j);
         if (v.is_wall || v.is_ground || v.is_outlier || v.voxel_points.empty()) return;
         if (v.mean.head<2>().squaredNorm() > r2max) return;
-        int hits = 0;
+        int hits = 0, structure = 0;
         auto& fp = fs_pt_[j]; fp.assign(v.voxel_points.size(), 0);
         for (size_t pk = 0; pk < v.voxel_points.size(); ++pk) {
             const auto& p = v.voxel_points[pk];
@@ -955,8 +958,11 @@ void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU&
             if (!cp) continue;
             const auto& c = *cp;
             const float fr = fs_decayed(c.free, c.last_free), oc = fs_decayed(c.occ, c.last_occ);
+            const bool known_free = fr >= params_.fs_min_free && fr >= params_.fs_free_ratio * oc;
+            // Static structure: occupied for struct_min_age frames and not known free since.
+            if (!known_free && c.first_occ > 0 && fs_frame_ >= c.first_occ + static_cast<uint32_t>(std::max(0, params_.struct_min_age))) ++structure;
             // Known free (enough free observations, rarely occupied) ...
-            if (fr < params_.fs_min_free || fr < params_.fs_free_ratio * oc) continue;
+            if (!known_free) continue;
             // ... and a void neighbourhood (DUFOMap-style dilation).
             if (params_.fs_flag_nb) { if (c.near == 0) { ++hits; fp[pk] = 1; } continue; }
             bool void_nb = true;
@@ -970,7 +976,15 @@ void DynamicObjectRejectionCPU::fs_query(const gtsam_points::DynamicVoxelMapCPU&
             if (void_nb) { ++hits; fp[pk] = 1; }
         }
         vis_frac_[j] = std::max(vis_frac_[j], static_cast<float>(hits) / v.voxel_points.size());
+        struct_frac_[j] = static_cast<float>(structure) / v.voxel_points.size();
     });
+}
+
+// A cell starts a new occupancy episode when it is first occupied, or occupied again after being known free
+// (a pedestrian walking back over its own path): static structure is what stays occupied from then on.
+void DynamicObjectRejectionCPU::fs_mark_first_occ(FsCell& c) const {
+    const float fr = fs_decayed(c.free, c.last_free), oc = fs_decayed(c.occ, c.last_occ);
+    if (c.first_occ == 0 || (fr >= params_.fs_min_free && fr >= params_.fs_free_ratio * oc)) c.first_occ = fs_frame_;
 }
 
 // Keep the map local: drop cells farther than fs_max_range + 10 m from the sensor (XY), one shard per thread.
@@ -1007,7 +1021,7 @@ void DynamicObjectRejectionCPU::fs_integrate_points(const std::vector<Eigen::Vec
         const double d2 = p.head<3>().squaredNorm();
         if (!(d2 > 1e-4) || d2 > r2max) continue;
         const Eigen::Vector3d w = T * p.head<3>();
-        { auto& ce = fs_cell(fs_key(w, inv)); bump(ce.occ, ce.last_occ); ce.marked = true; }
+        { auto& ce = fs_cell(fs_key(w, inv)); fs_mark_first_occ(ce); bump(ce.occ, ce.last_occ); ce.marked = true; }
         const double d = std::sqrt(d2);
         const double L = d - std::max(params_.fs_margin, params_.fs_margin_rel * d);
         if (L <= 0.0) continue;
@@ -1063,6 +1077,7 @@ void DynamicObjectRejectionCPU::fs_integrate(const gtsam_points::DynamicVoxelMap
             if (!(params_.fs_occ_static_only && dyn)) {
                 const int64_t ke = fs_key(w, inv);
                 auto& ce = fs_cell(ke);
+                fs_mark_first_occ(ce);
                 bump(ce.occ, ce.last_occ);
                 if (!ce.marked) {
                     ce.marked = true;
@@ -1239,6 +1254,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
     std::vector<int> dynamic_count(n_clusters, 0);
     std::vector<int> total_count  (n_clusters, 0);
     std::vector<double> vis_sum   (n_clusters, 0.0);
+    std::vector<double> struct_sum(n_clusters, 0.0);
     std::vector<std::vector<int>> members((params_.split_enable || params_.icp_enable || params_.vac_enable || params_.max_obj_bottom_hag > 0.0 || params_.max_obj_top_hag > 0.0) ? n_clusters : 0);
 
     // Dynamic-wins multi-cluster assignment: a voxel contributes to ALL base bboxes containing it.
@@ -1250,6 +1266,7 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             if (dyn) ++dynamic_count[c];
             if (!members.empty()) members[c].push_back(j);
             if (!vis_frac_.empty()) vis_sum[c] += vis_frac_[j];
+            if (static_cast<int>(struct_frac_.size()) == nvox) struct_sum[c] += struct_frac_[j];
         }
     }
 
@@ -1412,6 +1429,11 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             bool strong_c = !large_c || (ratio > params_.large_box_ratio && vm >= params_.large_box_vis);
             if (params_.icp_enable && large_c && icp_state[c] >= 0) strong_c = icp_state[c] == 1;
             const bool free_c = vm >= params_.min_obj_vis || cluster_bboxes[c].get_center().head<2>().norm() > params_.min_obj_vis_max_range;
+            // Own motion for the tracker's lock release: with locked_struct_frac, a cluster lying on static structure has
+            // none (precise: a moving object does not); otherwise no free-space and no strong voxel motion.
+            const bool on_structure = params_.locked_struct_frac > 0.0 && struct_sum[c] / total_count[c] >= params_.locked_struct_frac;
+            cluster_bboxes[c].set_own_motion(params_.locked_struct_frac > 0.0 ? !on_structure
+                                                                             : (vm >= params_.min_obj_vis || cluster_bboxes[c].has_strong_motion()));
             cluster_bboxes[c].set_frame_evidence(tall_c && strong_c && free_c ? ratio + vm : 0.0,
                                                  dynamic_count[c] == 0 && vm <= 0.0 && sp < params_.min_obj_speed);
         }
@@ -1428,8 +1450,9 @@ void DynamicObjectRejectionCPU::propagate_to_clusters(
             // the object shape: a locked cluster that is not person/vehicle-like is not removed this frame.
             // locked_max_height: the same with the box height only (the height above ground can be wrong
             // under a car, where the ground is occluded).
+            const bool on_structure = params_.locked_struct_frac > 0.0 && struct_sum[c] / total_count[c] >= params_.locked_struct_frac;
             if (cluster_bboxes[c].is_dynamic_bbox() &&
-                ((params_.locked_shape_check && !object_shape_ok(c)) ||
+                (on_structure || (params_.locked_shape_check && !object_shape_ok(c)) ||
                  (params_.locked_max_height > 0.0 && cluster_bboxes[c].get_size().z() > params_.locked_max_height))) {
                 cluster_bboxes[c].set_dynamic(false);
                 was_dynamic[c] = false;

@@ -141,6 +141,9 @@
     "hybrid_min_range": 20.0,
     "hybrid_max_range": 40.0,
     "hybrid_max_points": 8000,
-    "locked_max_height": 2.5
+    "locked_max_height": 2.5,
+    "_comment_locked_struct_frac": "a cluster locked dynamic that lies for >= this fraction on static structure (free-space map cells occupied for struct_min_age frames and not seen free since) is not removed and its lock is released: the track was handed over to a cabinet, a wall... 0 = off",
+    "locked_struct_frac": 0.7,
+    "struct_min_age": 30
   }
 }

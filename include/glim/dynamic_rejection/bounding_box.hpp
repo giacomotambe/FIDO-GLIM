@@ -79,6 +79,10 @@ public:
     /// Per-frame motion evidence of the cluster (dynamic-voxel ratio + free-space fraction), -1 = not computed,
     /// and whether this frame explicitly contradicts motion (no dynamic voxel, no free space, not moving).
     double get_frame_evidence() const { return frame_evidence_; }
+    /// Whether the cluster shows motion evidence of its own this frame (free space where it is now, or strong
+    /// voxel motion), independently of the state of its track. Computed for locked clusters too.
+    bool has_own_motion() const { return own_motion_; }
+    void set_own_motion(bool v)  { own_motion_ = v; }
     bool   is_contrary()        const { return contrary_; }
     void   set_frame_evidence(double e, bool contrary) { frame_evidence_ = e; contrary_ = contrary; }
 
@@ -112,6 +116,7 @@ private:
     std::vector<BoundingBox> parts_;
     double frame_evidence_ = -1.0;
     bool   contrary_ = false;
+    bool   own_motion_ = true;
     int  track_id;  ///< -1 = untracked / phantom
     // Precomputed for contains()
     Eigen::Matrix3d R_inv;

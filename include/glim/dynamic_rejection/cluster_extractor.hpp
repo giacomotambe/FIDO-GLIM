@@ -31,6 +31,8 @@ struct Track {
     PermanentState  permanent_state = PermanentState::NONE;
     int             unlock_frames  = 0;
     int             still_frames   = 0;   ///< Consecutive matched frames below permanent_release_speed while PERMANENT_DYNAMIC
+    int             no_motion_frames = 0; ///< Consecutive matched frames without own motion evidence while PERMANENT_DYNAMIC
+    Eigen::Vector3d no_motion_anchor = Eigen::Vector3d::Zero();  ///< Cluster centroid when that run started (current sensor frame)
     double          evidence = 0.0;       ///< Accumulated motion evidence (leaky sum of frame evidence - bias)
     int             hold = 0;             ///< Frames the confirmed-dynamic state is still held without new evidence   ///< Consecutive strong-motion frames while PERMANENT_STATIC
     Eigen::Vector3d velocity = Eigen::Vector3d::Zero();  ///< EMA-smoothed velocity [m/s] in current sensor frame
@@ -121,6 +123,12 @@ public:
     int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
     double permanent_release_speed;   ///< PERMANENT_DYNAMIC track whose window speed stays below this [m/s] ... 0 = never released. Default: 0
     int    permanent_release_frames;  ///< ... for this many consecutive matched frames is released (object stopped). Default: 10
+    int    permanent_release_no_motion_frames; ///< PERMANENT_DYNAMIC track whose cluster shows no motion of its own for this many
+                                               ///< matched frames is released: the track has been handed over to static structure.
+                                               ///< With locked_struct_frac > 0 "no own motion" = the cluster lies on static structure;
+                                               ///< otherwise = no free space and no strong voxel motion. 0 = off. Default: 3
+    double permanent_release_max_disp;         ///< ... and whose cluster centroid has moved less than this [m] (XY, ego-motion
+                                               ///< compensated) since the run started. <= 0 = no displacement check. Default: 0
 };
 
 // ===========================================================================

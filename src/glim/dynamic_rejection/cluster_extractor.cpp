@@ -74,6 +74,8 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     permanent_unlock_frames       = config.param<int>   ("dynamic_cluster_extractor", "permanent_unlock_frames",       2);
     permanent_release_speed       = config.param<double>("dynamic_cluster_extractor", "permanent_release_speed",       0.0);
     permanent_release_frames      = config.param<int>   ("dynamic_cluster_extractor", "permanent_release_frames",      10);
+    permanent_release_no_motion_frames = config.param<int>("dynamic_cluster_extractor", "permanent_release_no_motion_frames", 3);
+    permanent_release_max_disp    = config.param<double>("dynamic_cluster_extractor", "permanent_release_max_disp",    0.0);
     use_centroid_association      = config.param<bool>  ("dynamic_cluster_extractor", "use_centroid_association",      true);
     assoc_gate_base               = config.param<double>("dynamic_cluster_extractor", "assoc_gate_base",               0.8);
     assoc_gate_per_range          = config.param<double>("dynamic_cluster_extractor", "assoc_gate_per_range",          0.03);
@@ -821,6 +823,7 @@ void DynamicClusterExtractor::update_tracks(
     // (t.center holds the point centroid when use_centroid_association is enabled)
     for (auto& t : tracks_) {
         t.center   = T_to_current * t.center;
+        t.no_motion_anchor = T_to_current * t.no_motion_anchor;
         t.velocity = T_to_current.linear() * t.velocity;
         t.last_bbox.transform(T_to_current);
         for (auto& hbbox : t.bbox_history)
@@ -1051,6 +1054,31 @@ void DynamicClusterExtractor::update_dynamic_feedback(
                 spdlog::debug("[tracker] track={} PERMANENT_STATIC released (strong motion)", track.id);
             }
             continue;
+        }
+        // A PERMANENT_DYNAMIC track can be handed over to static structure (the pedestrian walks away from a
+        // cabinet and the track keeps the cabinet; its window speed stays high because the association jumps,
+        // so permanent_release_speed does not catch it). Released after permanent_release_no_motion_frames
+        // matched frames in which its own cluster shows no motion evidence and stays in place.
+        if (track.permanent_state == PermanentState::DYNAMIC && params_.permanent_release_no_motion_frames > 0) {
+            for (const auto& bbox : post_rejection_bboxes) {
+                if (bbox.get_track_id() != track.id) continue;
+                if (bbox.has_own_motion()) { track.no_motion_frames = 0; break; }
+                if (track.no_motion_frames == 0) track.no_motion_anchor = bbox.get_centroid();
+                const bool moved = params_.permanent_release_max_disp > 0.0 &&
+                    (bbox.get_centroid() - track.no_motion_anchor).head<2>().norm() > params_.permanent_release_max_disp;
+                track.no_motion_frames = moved ? 0 : track.no_motion_frames + 1;
+                break;
+            }
+            if (track.no_motion_frames >= params_.permanent_release_no_motion_frames) {
+                track.permanent_state  = PermanentState::NONE;
+                track.dynamic_frames   = 0;
+                track.static_frames    = 0;
+                track.no_motion_frames = 0;
+                track.evidence         = 0.0;
+                track.hold             = 0;
+                spdlog::debug("[tracker] track={} PERMANENT_DYNAMIC released (no own motion)", track.id);
+                continue;
+            }
         }
         if (track.permanent_state != PermanentState::NONE) {
             spdlog::debug("[tracker] track={} PERMANENT_{}", track.id,
