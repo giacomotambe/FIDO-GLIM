@@ -20,6 +20,7 @@ AsyncDynamicObjectRejection::AsyncDynamicObjectRejection(
 AsyncDynamicObjectRejection::~AsyncDynamicObjectRejection() {
     spdlog::debug("[dynamic_rejection][async] dtor begin");
     kill_switch = true;
+    wake();
     join();
     spdlog::debug("[dynamic_rejection][async] dtor end");
 }
@@ -28,11 +29,18 @@ void AsyncDynamicObjectRejection::insert_frame(const glim::PreprocessedFrame::Pt
     spdlog::debug("[dynamic_rejection][async] insert_frame: queue_size={}",
                   input_frame_queue.size());
     input_frame_queue.push_back(frame);
+    wake();
+}
+
+void AsyncDynamicObjectRejection::wake() {
+    { std::lock_guard<std::mutex> lock(wake_mutex_); }
+    wake_cv_.notify_one();
 }
 
 void AsyncDynamicObjectRejection::join() {
     spdlog::debug("[dynamic_rejection][async] join begin");
     end_of_sequence = true;
+    wake();
     if (thread.joinable()) thread.join();
     spdlog::debug("[dynamic_rejection][async] join end");
 }
@@ -75,7 +83,11 @@ void AsyncDynamicObjectRejection::run() {
 
         if (frames.empty()) {
             if (end_of_sequence) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // Sleep until insert_frame() / join() / the destructor wakes us (the timeout is only a safety net).
+            // Polling every 10 ms made each scan wait 5 ms on average before the rejection.
+            std::unique_lock<std::mutex> lock(wake_mutex_);
+            wake_cv_.wait_for(lock, std::chrono::milliseconds(100),
+                              [this] { return kill_switch || end_of_sequence || !input_frame_queue.empty(); });
             continue;
         }
 
@@ -89,7 +101,12 @@ void AsyncDynamicObjectRejection::run() {
             // Step 1: WallFilter — voxelize + mark wall voxels
             // ------------------------------------------------------------------
             auto t_wall = std::chrono::steady_clock::now();
-            const WallFilterResult wf = wall_filter_->filter(*frame);
+            // Pose of this scan for wall filter, clustering and rejection (predicted when there is no IMU).
+            dynamic_rejection_->set_frame_stamp(frame->stamp);
+            // Hybrid density: the rejection works on the frame + far raw points; the output
+            // frames contain only the original points (extra ones are dropped in reject()).
+            const auto work = DynamicObjectRejectionCPU::make_rejection_frame(frame, dynamic_rejection_->params());
+            const WallFilterResult wf = wall_filter_->filter(*work);
             const double dt_wall = T(t_wall);
             spdlog::debug("[PERF] wall_filter      {:.1f} ms  ({} vox)", dt_wall, wf.num_total_voxels);
 
@@ -112,8 +129,11 @@ void AsyncDynamicObjectRejection::run() {
             // Step 2: DynamicObjectRejection — score non-wall voxels
             // ------------------------------------------------------------------
             auto t_reject = std::chrono::steady_clock::now();
-            const DynamicRejectionResult dr =
-                dynamic_rejection_->reject(wf, frame, cluster_bboxes, historical_bboxes);
+            DynamicRejectionResult dr =
+                dynamic_rejection_->reject(wf, dynamic_rejection_->params().rej_input_points > 0 ? work : frame, cluster_bboxes, historical_bboxes);
+            // Rejection ran on its own sample of the raw scan: copy the labels onto the odometry frame.
+            if (dynamic_rejection_->params().rej_input_points > 0 && work != frame)
+                DynamicObjectRejectionCPU::transfer_labels(frame, dr, dynamic_rejection_->params());
 
             // Feed propagate_to_clusters() results back to the tracker so the
             // hysteresis counter (dynamic_frames) reflects confirmed dynamic detections.
@@ -146,60 +166,21 @@ void AsyncDynamicObjectRejection::run() {
             // Enqueue outputs
             // ------------------------------------------------------------------
 
-            // if (cluster_extractor_ && wf.voxelmap && !cluster_map.empty()) {
-            //     // Conta il numero di cluster dalla mappa
-            //     int num_clusters = 0;
-            //     for (int cid : cluster_map)
-            //         if (cid >= 0) num_clusters = std::max(num_clusters, cid + 1);
- 
-            //     if (num_clusters > 0) {
-            //         // Raccoglie i punti solo dei cluster dinamici
-            //         // (almeno un voxel del cluster ha is_dynamic == true
-            //         //  dopo la propagazione)
-            //         const int nvox = static_cast<int>(cluster_map.size());
-            //         std::vector<bool> cluster_is_dynamic(num_clusters, false);
-            //         for (int i = 0; i < nvox; ++i) {
-            //             const int cid = cluster_map[i];
-            //             if (cid >= 0 && wf.voxelmap->lookup_voxel(i).is_dynamic)
-            //                 cluster_is_dynamic[cid] = true;
-            //         }
- 
-            //         // Costruisce point_clusters solo per i cluster dinamici
-            //         std::vector<std::vector<Eigen::Vector4d>> dyn_point_clusters(num_clusters);
-            //         for (int i = 0; i < nvox; ++i) {
-            //             const int cid = cluster_map[i];
-            //             if (cid >= 0) {
-            //                 const auto& vox = wf.voxelmap->lookup_voxel(i);
-            //                 dyn_point_clusters[cid].insert(
-            //                     dyn_point_clusters[cid].end(),
-            //                     vox.voxel_points.begin(),
-            //                     vox.voxel_points.end());
-            //             }
-            //         }
- 
-            //         // Rimuove cluster vuoti (statici) e calcola OBB
-            //         dyn_point_clusters.erase(
-            //             std::remove_if(dyn_point_clusters.begin(), dyn_point_clusters.end(),
-            //                 [](const std::vector<Eigen::Vector4d>& c){ return c.empty(); }),
-            //             dyn_point_clusters.end());
- 
-            //         auto bboxes = cluster_extractor_->compute_bounding_boxes(dyn_point_clusters);
- 
-            //         if (!bboxes.empty()) {
-            //             cluster_bbox_queue_.push_back(std::move(bboxes));
-            //             spdlog::debug("[dynamic_rejection][async] {} dynamic cluster bboxes enqueued",
-            //                           cluster_bbox_queue_.size());
-            //         }
-            //     }
-            // }
-
-
             wall_result_queue.push_back(wf);
-            output_frame_queue.push_back(dr.static_frame);
-            cluster_bbox_queue_.push_back(cluster_bboxes);
-            if (dr.dynamic_frame) {
-                dynamic_frame_queue.push_back(dr.dynamic_frame);
+            const bool use_delayed = dynamic_rejection_->params().fut_delay > 0 && dynamic_rejection_->params().fut_output_delayed;
+            const auto emit_static = [this](const glim::PreprocessedFrame::Ptr& f) {
+                if (output_callback_) output_callback_(f);
+                else output_frame_queue.push_back(f);
+            };
+            if (!use_delayed) {
+                emit_static(dr.static_frame);
+                if (dr.dynamic_frame) dynamic_frame_queue.push_back(dr.dynamic_frame);
+            } else if (dr.has_delayed) {
+                // Look-ahead mode: frames leave fut_delay frames late, refined with the following scans.
+                if (dr.delayed_static_frame) emit_static(dr.delayed_static_frame);
+                if (dr.delayed_dynamic_frame && !dr.delayed_dynamic_frame->points.empty()) dynamic_frame_queue.push_back(dr.delayed_dynamic_frame);
             }
+            cluster_bbox_queue_.push_back(cluster_bboxes);
 
             // Always enqueue the wall result so the caller can publish wall
             // voxels even when no wall planes were found (num_wall_voxels == 0).

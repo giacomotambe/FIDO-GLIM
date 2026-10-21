@@ -47,6 +47,7 @@ struct WallFilterResult {
 
 struct WallFilterConfig {
     double voxel_resolution;
+    int    rng_seed;               ///< RANSAC seed (< 0 = random_device; fixed for reproducible runs)
     int    ransac_max_iterations;
     double ransac_inlier_threshold;
     int    ransac_min_inliers;
@@ -55,6 +56,8 @@ struct WallFilterConfig {
     double floor_ceiling_angle_deg;
     int    floor_min_inliers;
     int    max_planes;
+    bool   wall_exclude_ground;    ///< search walls only among non-ground voxels (ground is segmented first)
+    bool   wall_vertical_ransac;   ///< 2-point RANSAC with horizontal normal instead of the generic 3-point one
     double wall_bbox_max_aspect_ratio;
     double floor_height_threshold;
 
@@ -140,7 +143,12 @@ private:
 
     /// Esegue un'iterazione RANSAC; rimuove gli inlier da pts.
     /// Restituisce false se non trova un piano con abbastanza inlier.
-    bool ransac_once(std::vector<Eigen::Vector3d>& pts, PlaneModel& best_plane);
+    /// vertical = true: ipotesi da 2 punti con normale orizzontale (solo piani verticali).
+    bool ransac_once(std::vector<Eigen::Vector3d>& pts, PlaneModel& best_plane, bool vertical = false);
+
+    /// Marca is_ground (segmentazione polare, poi bbox del piano RANSAC del pavimento).
+    void segment_ground(gtsam_points::DynamicVoxelMapCPU& voxelmap, int nvox,
+                        const std::vector<Eigen::Vector3d>& centroids, WallFilterResult& result) const;
 
     bool is_wall_plane(const PlaneModel& plane) const;
 

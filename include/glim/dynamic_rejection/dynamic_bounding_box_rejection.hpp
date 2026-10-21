@@ -33,6 +33,7 @@ private:
     std::vector<int>         bbox_ages_;   ///< frame age of each bbox; removed when age > max_bbox_frames_
     std::vector<int>         last_removed_counts_;
     int                      max_bbox_frames_;
+    int                      num_threads_ = 4;
     PreprocessedFrame::Ptr last_dynamic_frame = nullptr;
     double inflate_margin_;
     VelocityInflationParams inflate_params_;

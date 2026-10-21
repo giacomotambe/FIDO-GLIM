@@ -14,8 +14,13 @@
 #include <glim/dynamic_rejection/cluster_extractor.hpp>
 
 #include <algorithm>
+#include <Eigen/Eigenvalues>
+#include <memory>
+#include <cmath>
 #include <limits>
 #include <numeric>
+#include <functional>
+#include <unordered_map>
 #include <spdlog/spdlog.h>
 #include <gtsam_points/ann/kdtree.hpp>
 #include <glim/util/config.hpp>
@@ -63,6 +68,48 @@ DynamicClusterExtractorParams::DynamicClusterExtractorParams() {
     permanent_dynamic_frames  = config.param<int>("dynamic_cluster_extractor", "permanent_dynamic_frames",  10);
     permanent_static_frames   = config.param<int>("dynamic_cluster_extractor", "permanent_static_frames",   10);
     track_bbox_history_size   = config.param<int>("dynamic_cluster_extractor", "track_bbox_history_size",   5);
+    use_motion_prediction         = config.param<bool>  ("dynamic_cluster_extractor", "use_motion_prediction",         true);
+    fast_track_speed              = config.param<double>("dynamic_cluster_extractor", "fast_track_speed",              0.0);
+    fast_track_min_dynamic_frames = config.param<int>   ("dynamic_cluster_extractor", "fast_track_min_dynamic_frames", 1);
+    permanent_unlock_frames       = config.param<int>   ("dynamic_cluster_extractor", "permanent_unlock_frames",       2);
+    permanent_release_speed       = config.param<double>("dynamic_cluster_extractor", "permanent_release_speed",       0.0);
+    permanent_release_frames      = config.param<int>   ("dynamic_cluster_extractor", "permanent_release_frames",      10);
+    permanent_release_no_motion_frames = config.param<int>("dynamic_cluster_extractor", "permanent_release_no_motion_frames", 3);
+    permanent_release_max_disp    = config.param<double>("dynamic_cluster_extractor", "permanent_release_max_disp",    0.0);
+    use_centroid_association      = config.param<bool>  ("dynamic_cluster_extractor", "use_centroid_association",      true);
+    assoc_gate_base               = config.param<double>("dynamic_cluster_extractor", "assoc_gate_base",               0.8);
+    assoc_gate_per_range          = config.param<double>("dynamic_cluster_extractor", "assoc_gate_per_range",          0.03);
+    assoc_gate_per_missed         = config.param<double>("dynamic_cluster_extractor", "assoc_gate_per_missed",         0.3);
+    if (config.param<bool>("dynamic_cluster_extractor", "apply_lidar_imu_extrinsic", true)) {
+        Config sensors(GlobalConfig::get_config_path("config_sensors"));
+        T_imu_lidar = sensors.param<Eigen::Isometry3d>("sensors", "T_lidar_imu", Eigen::Isometry3d::Identity()).inverse();
+    }
+    dbscan_voxel_hash             = config.param<bool>  ("dynamic_cluster_extractor", "dbscan_voxel_hash",             true);
+    dbscan_cell_range             = config.param<int>   ("dynamic_cluster_extractor", "dbscan_cell_range",             1);
+    cluster_max_range             = config.param<double>("dynamic_cluster_extractor", "cluster_max_range",             40.0);
+    cluster_max_height            = config.param<double>("dynamic_cluster_extractor", "cluster_max_height",            4.0);
+    cluster_ground_cell           = config.param<double>("dynamic_cluster_extractor", "cluster_ground_cell",           2.0);
+    eps_range_k                   = config.param<double>("dynamic_cluster_extractor", "eps_range_k",                   0.0);
+    eps_range_vertical            = config.param<bool>  ("dynamic_cluster_extractor", "eps_range_vertical",            true);
+    frag_merge_gap                = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap",                0.5);
+    frag_merge_gap_k              = config.param<double>("dynamic_cluster_extractor", "frag_merge_gap_k",              0.02);
+    use_obb                       = config.param<bool>  ("dynamic_cluster_extractor", "use_obb",                       false);
+    obb_min_points                = config.param<int>   ("dynamic_cluster_extractor", "obb_min_points",                8);
+    obb_min_elongation            = config.param<double>("dynamic_cluster_extractor", "obb_min_elongation",            2.0);
+    obb_max_area_ratio            = config.param<double>("dynamic_cluster_extractor", "obb_max_area_ratio",            0.9);
+    track_evidence_decay          = config.param<double>("dynamic_cluster_extractor", "track_evidence_decay",          0.8);
+    track_evidence_bias           = config.param<double>("dynamic_cluster_extractor", "track_evidence_bias",           0.1);
+    track_evidence_on             = config.param<double>("dynamic_cluster_extractor", "track_evidence_on",             -1.0);
+    track_evidence_max            = config.param<double>("dynamic_cluster_extractor", "track_evidence_max",            2.0);
+    confirmed_hold_frames         = config.param<int>   ("dynamic_cluster_extractor", "confirmed_hold_frames",         0);
+    inherit_gate                  = config.param<double>("dynamic_cluster_extractor", "inherit_gate",                  -1.0);
+    inherit_gate_per_range        = config.param<double>("dynamic_cluster_extractor", "inherit_gate_per_range",        0.05);
+    coast_label                   = config.param<bool>  ("dynamic_cluster_extractor", "coast_label",                   false);
+    assoc_size_weight             = config.param<double>("dynamic_cluster_extractor", "assoc_size_weight",             0.0);
+    frag_max_len                  = config.param<double>("dynamic_cluster_extractor", "frag_max_len",                  6.0);
+    frag_max_wid                  = config.param<double>("dynamic_cluster_extractor", "frag_max_wid",                  3.0);
+    frag_max_hgt                  = config.param<double>("dynamic_cluster_extractor", "frag_max_hgt",                  4.0);
+    release_static_frames         = config.param<int>   ("dynamic_cluster_extractor", "release_static_frames",         0);
 
     spdlog::debug("[cluster_extractor] eps_factor={:.2f} min_pts={} knn_max={} "
                   "min_cluster_voxels={} min_points_bbox={} "
@@ -157,14 +204,16 @@ std::vector<BoundingBox> DynamicClusterExtractor::extract_clusters(
         const double dt = (last_stamp_ > 0.0 && stamp > last_stamp_) ? (stamp - last_stamp_) : 0.0;
         last_stamp_ = stamp;
 
-        const Eigen::Isometry3d cur_pose     = pose_kalman_filter_->getPose();
-        const Eigen::Isometry3d T_to_current = (cur_pose * last_pose_.inverse()).inverse();
+        // getFramePose() = T_world_sensor of the current scan. Maps previous-sensor-frame quantities into the
+        // current sensor frame: T_cur^-1 * T_prev (was (T_cur * T_prev^-1)^-1, a world-frame delta).
+        const Eigen::Isometry3d cur_pose     = pose_kalman_filter_->getFramePose() * params_.T_imu_lidar;   // T_world_lidar
+        const Eigen::Isometry3d T_to_current = cur_pose.inverse() * last_pose_;
         last_pose_ = cur_pose;
 
         // Label bboxes with historical track state BEFORE NMS/merge so that
         // bboxes with distinct known tracks are protected from suppression/absorption.
         if (!tracks_.empty()) {
-            label_bboxes_from_tracks(bboxes, T_to_current);
+            label_bboxes_from_tracks(bboxes, T_to_current, dt);
         }
 
         bboxes = nms3D(bboxes, params_.cluster_iou_threshold);
@@ -203,12 +252,35 @@ DynamicClusterExtractor::cluster_voxels(
     active_ids.reserve(nvox);
     active_cents.reserve(nvox);
 
+    // Local ground height (min z per XY cell + 8 neighbours) for the height ROI.
+    std::unordered_map<int64_t, float> gz;
+    const double ginv = 1.0 / std::max(0.1, params_.cluster_ground_cell);
+    const auto gkey = [](int x, int y) { return (static_cast<int64_t>(x) << 32) ^ static_cast<uint32_t>(y); };
+    if (params_.cluster_max_height > 0.0) {
+        for (int i = 0; i < nvox; ++i) {
+            const auto& m = voxelmap->lookup_voxel(i).mean;
+            const int64_t k = gkey(static_cast<int>(std::floor(m.x() * ginv)), static_cast<int>(std::floor(m.y() * ginv)));
+            auto it = gz.find(k);
+            if (it == gz.end()) gz.emplace(k, static_cast<float>(m.z())); else it->second = std::min(it->second, static_cast<float>(m.z()));
+        }
+    }
+    const auto ground_at = [&](const Eigen::Vector4d& m) {
+        const int cx = static_cast<int>(std::floor(m.x() * ginv)), cy = static_cast<int>(std::floor(m.y() * ginv));
+        float g = std::numeric_limits<float>::infinity();
+        for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) {
+            auto it = gz.find(gkey(cx + dx, cy + dy)); if (it != gz.end()) g = std::min(g, it->second);
+        }
+        return g;
+    };
+    const double max_r2 = params_.cluster_max_range > 0.0 ? params_.cluster_max_range * params_.cluster_max_range
+                                                          : std::numeric_limits<double>::infinity();
     for (int i = 0; i < nvox; ++i) {
         const auto& v = voxelmap->lookup_voxel(i);
-        if (!v.is_wall && !v.is_ground && !v.is_outlier) {
-            active_ids.push_back(i);
-            active_cents.push_back(v.mean);
-        }
+        if (v.is_wall || v.is_ground || v.is_outlier) continue;
+        if (v.mean.head<2>().squaredNorm() > max_r2) continue;                                   // too far
+        if (params_.cluster_max_height > 0.0 && v.mean.z() - ground_at(v.mean) > params_.cluster_max_height) continue;  // canopy / facades
+        active_ids.push_back(i);
+        active_cents.push_back(v.mean);
     }
 
     const int n_active = static_cast<int>(active_ids.size());
@@ -224,12 +296,56 @@ DynamicClusterExtractor::cluster_voxels(
     spdlog::debug("[DBSCAN] voxel_res={:.3f} eps={:.3f} min_pts={} knn_k={}",
                   voxel_res, eps, min_pts, knn_k);
 
-    gtsam_points::KdTree tree(active_cents.data(), n_active);
+    // Neighbour search backend: voxel-coordinate hash (O(n)) or KD-tree (legacy).
+    std::unique_ptr<gtsam_points::KdTree> tree;
+    std::unordered_map<int64_t, int> cell_of;
+    std::vector<Eigen::Vector3i> coords;
+    const auto ckey = [](const Eigen::Vector3i& c) {
+        return ((static_cast<int64_t>(c.x()) & 0x1FFFFF) << 42) | ((static_cast<int64_t>(c.y()) & 0x1FFFFF) << 21) | (static_cast<int64_t>(c.z()) & 0x1FFFFF);
+    };
+    if (params_.dbscan_voxel_hash) {
+        cell_of.reserve(n_active * 2);
+        coords.resize(n_active);
+        for (int i = 0; i < n_active; ++i) {
+            coords[i] = voxelmap->voxel_coord(active_cents[i]);
+            cell_of.emplace(ckey(coords[i]), i);
+        }
+    } else {
+        tree = std::make_unique<gtsam_points::KdTree>(active_cents.data(), n_active);
+    }
+    const int R = std::max(1, params_.dbscan_cell_range);
 
     auto range_query = [&](int local_idx) -> std::vector<int> {
+        if (params_.dbscan_voxel_hash) {
+            std::vector<int> neighbors;
+            const Eigen::Vector3i& c0 = coords[local_idx];
+            double e2 = eps2; int Rq = R, Rz = R;
+            // Range-scaled eps (sparse rings): widen the search only where k * range exceeds the base eps,
+            // so closer voxels keep exactly the fixed-eps neighbourhood. eps_range_vertical: widen it only
+            // along z (the gap between rings is vertical; along a ring points stay dense), an ellipsoid
+            // with semi-axes eps and k * range that costs (2R+1)^2 (2Rz+1) cells instead of (2Rz+1)^3.
+            const double e_range = params_.eps_range_k * active_cents[local_idx].head<2>().norm();
+            const bool widen = e_range > eps;
+            if (widen) {
+                Rz = std::max(R, static_cast<int>(std::ceil(e_range / voxel_res)));
+                if (!params_.eps_range_vertical) { e2 = e_range * e_range; Rq = Rz; }
+            }
+            const bool ellipsoid = widen && params_.eps_range_vertical;
+            const double inv_ez2 = ellipsoid ? 1.0 / (e_range * e_range) : 0.0;
+            for (int dx = -Rq; dx <= Rq; ++dx) for (int dy = -Rq; dy <= Rq; ++dy) for (int dz = -Rz; dz <= Rz; ++dz) {
+                if (!dx && !dy && !dz) continue;
+                auto it = cell_of.find(ckey(Eigen::Vector3i(c0.x() + dx, c0.y() + dy, c0.z() + dz)));
+                if (it == cell_of.end()) continue;
+                const Eigen::Vector4d d = active_cents[it->second] - active_cents[local_idx];
+                const bool in = ellipsoid ? d.head<2>().squaredNorm() / eps2 + d.z() * d.z() * inv_ez2 <= 1.0
+                                          : d.head<3>().squaredNorm() <= e2;
+                if (in) neighbors.push_back(it->second);
+            }
+            return neighbors;
+        }
         std::vector<size_t> k_idx(knn_k);
         std::vector<double> k_sq (knn_k);
-        const size_t found = tree.knn_search(
+        const size_t found = tree->knn_search(
             active_cents[local_idx].data(), knn_k, k_idx.data(), k_sq.data());
 
         std::vector<int> neighbors;
@@ -406,6 +522,26 @@ bool DynamicClusterExtractor::createAABB(
     if (params_.bbox_max_volume < 1e8 && volume > params_.bbox_max_volume)  return false;
 
     out_bbox = BoundingBox(size, center, Eigen::Matrix3d::Identity());
+    Eigen::Vector3d mean = Eigen::Vector3d::Zero();
+    for (const auto& p : cluster) mean += p.head<3>();
+    if (params_.use_obb && static_cast<int>(cluster.size()) >= params_.obb_min_points) {
+        // Yaw-only OBB from the XY principal axis; elongated clusters only (round ones stay axis-aligned).
+        const Eigen::Vector2d m2 = mean.head<2>() / static_cast<double>(cluster.size());
+        Eigen::Matrix2d cov = Eigen::Matrix2d::Zero();
+        for (const auto& p : cluster) { const Eigen::Vector2d d = p.head<2>() - m2; cov += d * d.transpose(); }
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> es(cov);
+        if (es.info() == Eigen::Success && es.eigenvalues()(1) > params_.obb_min_elongation * std::max(es.eigenvalues()(0), 1e-9)) {
+            const Eigen::Vector2d ax = es.eigenvectors().col(1);
+            const double yaw = std::atan2(ax.y(), ax.x());
+            const Eigen::Matrix3d R = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+            Eigen::Vector3d lo = Eigen::Vector3d::Constant(std::numeric_limits<double>::max()), hi = -lo;
+            for (const auto& p : cluster) { const Eigen::Vector3d q = R.transpose() * p.head<3>(); lo = lo.cwiseMin(q); hi = hi.cwiseMax(q); }
+            const Eigen::Vector3d s_obb = hi - lo;
+            if (s_obb.x() * s_obb.y() < params_.obb_max_area_ratio * size.x() * size.y())
+                out_bbox = BoundingBox(s_obb, R * (0.5 * (lo + hi)), R);
+        }
+    }
+    if (!cluster.empty()) out_bbox.set_centroid(mean / static_cast<double>(cluster.size()));
     return true;
 }
 
@@ -435,7 +571,10 @@ static BoundingBox compute_union_bbox(const BoundingBox& a, const BoundingBox& b
         hi = hi.cwiseMax(v);
     }
 
-    return BoundingBox(hi - lo, c_a + R * (0.5 * (lo + hi)), R);
+    BoundingBox u(hi - lo, c_a + R * (0.5 * (lo + hi)), R);
+    const double va = std::max(a.get_size().prod(), 1e-9), vb = std::max(b.get_size().prod(), 1e-9);
+    u.set_centroid((va * a.get_centroid() + vb * b.get_centroid()) / (va + vb));
+    return u;
 }
 
 // ===========================================================================
@@ -449,6 +588,45 @@ static BoundingBox compute_union_bbox(const BoundingBox& a, const BoundingBox& b
 std::vector<BoundingBox> DynamicClusterExtractor::merge_nearby_clusters(
     const std::vector<BoundingBox>& bboxes) const
 {
+    if (params_.frag_merge_gap >= 0.0 && !bboxes.empty()) {
+        // Fragment merge: AABB gap (not centre distance) below a range-dependent threshold and
+        // union size still plausible for a single object. Iterates to convergence.
+        std::vector<BoundingBox> w(bboxes);
+        bool merged = true;
+        while (merged) {
+            merged = false;
+            std::vector<bool> gone(w.size(), false);
+            for (size_t i = 0; i < w.size(); ++i) {
+                if (gone[i]) continue;
+                for (size_t j = i + 1; j < w.size(); ++j) {
+                    if (gone[j]) continue;
+                    const int ti = w[i].get_track_id(), tj = w[j].get_track_id();
+                    if (ti != -1 && tj != -1 && ti != tj) continue;
+                    const Eigen::Vector3d gap = ((w[i].get_center() - w[j].get_center()).cwiseAbs()
+                                                 - (w[i].aabb_half_extent() + w[j].aabb_half_extent())).cwiseMax(0.0);
+                    const double r = 0.5 * (w[i].get_center() + w[j].get_center()).head<2>().norm();
+                    if (gap.norm() > params_.frag_merge_gap + params_.frag_merge_gap_k * r) continue;
+                    BoundingBox u = compute_union_bbox(w[i], w[j]);
+                    Eigen::Vector3d s = u.get_size(); const double hz = s.z();
+                    const double lxy = std::max(s.x(), s.y()), sxy = std::min(s.x(), s.y());
+                    if (lxy > params_.frag_max_len || sxy > params_.frag_max_wid || hz > params_.frag_max_hgt) continue;
+                    u.set_track_id(ti != -1 ? ti : tj);
+                    u.set_dynamic(w[i].is_dynamic_bbox() || w[j].is_dynamic_bbox());
+                    std::vector<BoundingBox> parts;
+                    for (const BoundingBox* b : {&w[i], &w[j]}) {
+                        if (b->parts().empty()) { BoundingBox c = *b; c.set_parts({}); parts.push_back(c); }
+                        else parts.insert(parts.end(), b->parts().begin(), b->parts().end());
+                    }
+                    u.set_parts(std::move(parts));
+                    w[i] = u; gone[j] = true; merged = true;
+                }
+            }
+            std::vector<BoundingBox> tmp;
+            for (size_t i = 0; i < w.size(); ++i) if (!gone[i]) tmp.push_back(w[i]);
+            w.swap(tmp);
+        }
+        return w;
+    }
     if (params_.peer_merge_distance <= 0.0 || bboxes.empty()) return bboxes;
 
     const double d2_max = params_.peer_merge_distance * params_.peer_merge_distance;
@@ -513,34 +691,104 @@ std::vector<BoundingBox> DynamicClusterExtractor::merge_nearby_clusters(
 // will re-assign it correctly based on hysteresis after NMS/merge.
 // ===========================================================================
 
+// Minimum-cost assignment (Hungarian / Kuhn-Munkres, O(n^3)) on a rectangular cost matrix.
+// Returns for each row the assigned column or -1. Entries >= kInf are never accepted.
+static constexpr double kInf = 1e9;
+static std::vector<int> hungarian(const std::vector<std::vector<double>>& cost, int rows, int cols) {
+    std::vector<int> out(rows, -1);
+    if (rows == 0 || cols == 0) return out;
+    const int n = std::max(rows, cols);
+    std::vector<std::vector<double>> a(n + 1, std::vector<double>(n + 1, kInf));
+    for (int i = 0; i < rows; ++i) for (int j = 0; j < cols; ++j) a[i + 1][j + 1] = cost[i][j];
+    std::vector<double> u(n + 1), v(n + 1); std::vector<int> p(n + 1), way(n + 1);
+    for (int i = 1; i <= n; ++i) {
+        p[0] = i; int j0 = 0;
+        std::vector<double> minv(n + 1, std::numeric_limits<double>::infinity()); std::vector<char> used(n + 1, false);
+        do {
+            used[j0] = true; const int i0 = p[j0]; double delta = std::numeric_limits<double>::infinity(); int j1 = 0;
+            for (int j = 1; j <= n; ++j) if (!used[j]) {
+                const double cur = a[i0][j] - u[i0] - v[j];
+                if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+                if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+            }
+            for (int j = 0; j <= n; ++j) { if (used[j]) { u[p[j]] += delta; v[j] -= delta; } else minv[j] -= delta; }
+            j0 = j1;
+        } while (p[j0] != 0);
+        do { const int j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0);
+    }
+    for (int j = 1; j <= n; ++j)
+        if (p[j] >= 1 && p[j] <= rows && j <= cols && a[p[j]][j] < kInf) out[p[j] - 1] = j - 1;
+    return out;
+}
+
+bool DynamicClusterExtractor::is_confirmed(const Track& t) const {
+    if (t.dynamic_frames >= required_dynamic_frames(t)) return true;
+    if (params_.track_evidence_on > 0.0 && t.evidence >= params_.track_evidence_on) return true;
+    return t.hold > 0;
+}
+
+int DynamicClusterExtractor::required_dynamic_frames(const Track& t) const {
+    if (params_.fast_track_speed > 0.0 &&
+        std::hypot(t.velocity.x(), t.velocity.y()) > params_.fast_track_speed)
+        return std::min(params_.fast_track_min_dynamic_frames, params_.min_dynamic_frames);
+    return params_.min_dynamic_frames;
+}
+
+BoundingBox DynamicClusterExtractor::predicted_bbox(
+    const Track& t, const Eigen::Isometry3d& T_to_current, double dt) const
+{
+    BoundingBox b = t.last_bbox;
+    b.transform(T_to_current);
+    if (params_.use_motion_prediction && dt > 0.0) {
+        Eigen::Isometry3d shift = Eigen::Isometry3d::Identity();
+        shift.translation() = (T_to_current.linear() * t.velocity) * dt;
+        b.transform(shift);
+    }
+    return b;
+}
+
 void DynamicClusterExtractor::label_bboxes_from_tracks(
     std::vector<BoundingBox>& bboxes,
-    const Eigen::Isometry3d&  T_to_current) const
+    const Eigen::Isometry3d&  T_to_current,
+    double                    dt) const
 {
     const double D2 = params_.track_match_distance * params_.track_match_distance;
+
+    // Predict every track once (was: once per track x bbox pair).
+    std::vector<BoundingBox> preds;
+    preds.reserve(tracks_.size());
+    for (const auto& t : tracks_) preds.push_back(predicted_bbox(t, T_to_current, dt));
 
     for (auto& bbox : bboxes) {
         double best_ov  = 0.0;
         bool   is_dyn   = false;
         int    best_tid = -1;
 
-        for (const auto& t : tracks_) {
-            const Eigen::Vector3d c_curr = T_to_current * t.center;
-            if ((c_curr - bbox.get_center()).squaredNorm() > D2) continue;
+        for (size_t ti = 0; ti < tracks_.size(); ++ti) {
+            const auto& t = tracks_[ti];
+            const BoundingBox& pred = preds[ti];
+            double score;
+            if (params_.use_centroid_association) {
+                const double gate = params_.assoc_gate_base + params_.assoc_gate_per_range * bbox.get_centroid().head<2>().norm()
+                                  + params_.assoc_gate_per_missed * t.missed_frames;
+                const double d = (pred.get_centroid() - bbox.get_centroid()).norm();
+                if (d > gate) continue;
+                score = 1.0 / (1e-3 + d);          // closer = better
+            } else {
+                if ((pred.get_center() - bbox.get_center()).squaredNorm() > D2) continue;
+                score = pred.overlap(bbox);
+                if (score < params_.track_match_iou) continue;
+            }
+            if (score <= best_ov) continue;
 
-            BoundingBox last_curr = t.last_bbox;
-            last_curr.transform(T_to_current);
-            const double ov = last_curr.overlap(bbox);
-            if (ov < params_.track_match_iou || ov <= best_ov) continue;
-
-            best_ov  = ov;
+            best_ov  = score;
             best_tid = t.id;
             if (t.permanent_state == PermanentState::STATIC) {
                 is_dyn = false;
             } else if (t.permanent_state == PermanentState::DYNAMIC) {
                 is_dyn = true;
             } else {
-                is_dyn = (t.dynamic_frames >= params_.min_dynamic_frames);
+                is_dyn = is_confirmed(t);
             }
         }
         bbox.set_dynamic(is_dyn);
@@ -551,9 +799,9 @@ void DynamicClusterExtractor::label_bboxes_from_tracks(
 // ===========================================================================
 // update_tracks()
 //
-// Overlap-based tracking: no velocity estimation.
-// Matching criterion: center distance < track_match_distance (cheap gate)
-//                     AND overlap > track_match_iou.
+// Overlap-based tracking with constant-velocity prediction.
+// Matching criterion: predicted center distance < track_match_distance (cheap gate)
+//                     AND overlap(predicted bbox, bbox) > track_match_iou.
 // Greedy assignment ranked by overlap (best overlap first).
 // ===========================================================================
 
@@ -565,14 +813,23 @@ void DynamicClusterExtractor::update_tracks(
     const int N_tracks = static_cast<int>(tracks_.size());
     const int N_bboxes = static_cast<int>(bboxes.size());
 
-    // Transform track centers and all history into current sensor frame.
+    // Predicted bboxes (computed from the previous-frame state).
+    std::vector<BoundingBox> predicted;
+    predicted.reserve(N_tracks);
+    for (const auto& t : tracks_)
+        predicted.push_back(predicted_bbox(t, T_to_current, dt));
+
+    // Transform track state and history into current sensor frame.
+    // (t.center holds the point centroid when use_centroid_association is enabled)
     for (auto& t : tracks_) {
-        t.center = T_to_current * t.center;
+        t.center   = T_to_current * t.center;
+        t.no_motion_anchor = T_to_current * t.no_motion_anchor;
+        t.velocity = T_to_current.linear() * t.velocity;
         t.last_bbox.transform(T_to_current);
         for (auto& hbbox : t.bbox_history)
             hbbox.transform(T_to_current);
     }
-        
+
 
     // Build candidate pairs gated by distance, ranked by overlap.
     struct Pair { int t_idx, b_idx; double overlap; };
@@ -580,16 +837,50 @@ void DynamicClusterExtractor::update_tracks(
 
     const double D2 = params_.track_match_distance * params_.track_match_distance;
 
-    for (int t = 0; t < N_tracks; ++t) {
-        for (int b = 0; b < N_bboxes; ++b) {
-            if ((tracks_[t].center - bboxes[b].get_center()).squaredNorm() > D2) continue;
-            const double ov = tracks_[t].last_bbox.overlap(bboxes[b]);
-            if (ov >= params_.track_match_iou)
-                pairs.push_back({t, b, ov});
+    if (params_.use_centroid_association) {
+        // Global assignment on predicted-centroid distance with a range/missed-dependent gate.
+        std::vector<std::vector<double>> cost(N_tracks, std::vector<double>(N_bboxes, kInf));
+        for (int t = 0; t < N_tracks; ++t)
+            for (int b = 0; b < N_bboxes; ++b) {
+                const double gate = params_.assoc_gate_base
+                    + params_.assoc_gate_per_range * bboxes[b].get_centroid().head<2>().norm()
+                    + params_.assoc_gate_per_missed * tracks_[t].missed_frames;
+                const double d = (predicted[t].get_centroid() - bboxes[b].get_centroid()).norm();
+                if (d <= gate) cost[t][b] = d + params_.assoc_size_weight * (predicted[t].get_size() - bboxes[b].get_size()).norm();
+            }
+        // Solve independently on each connected component of the gating graph
+        // (identical optimum, but O(sum k^3) instead of O(n^3) with ~hundreds of clusters outdoors).
+        std::vector<int> parent(N_tracks + N_bboxes);
+        std::iota(parent.begin(), parent.end(), 0);
+        std::function<int(int)> find = [&](int x) { return parent[x] == x ? x : parent[x] = find(parent[x]); };
+        for (int t = 0; t < N_tracks; ++t)
+            for (int b = 0; b < N_bboxes; ++b)
+                if (cost[t][b] < kInf) parent[find(t)] = find(N_tracks + b);
+        std::unordered_map<int, std::pair<std::vector<int>, std::vector<int>>> comps;
+        for (int t = 0; t < N_tracks; ++t) comps[find(t)].first.push_back(t);
+        for (int b = 0; b < N_bboxes; ++b) comps[find(N_tracks + b)].second.push_back(b);
+        for (const auto& [root, tb] : comps) {
+            const auto& ts = tb.first; const auto& bs = tb.second;
+            if (ts.empty() || bs.empty()) continue;
+            std::vector<std::vector<double>> sub(ts.size(), std::vector<double>(bs.size()));
+            for (size_t i = 0; i < ts.size(); ++i)
+                for (size_t k = 0; k < bs.size(); ++k) sub[i][k] = cost[ts[i]][bs[k]];
+            const auto assign = hungarian(sub, static_cast<int>(ts.size()), static_cast<int>(bs.size()));
+            for (size_t i = 0; i < ts.size(); ++i)
+                if (assign[i] >= 0) pairs.push_back({ts[i], bs[assign[i]], 1.0 / (1e-3 + sub[i][assign[i]])});
+        }
+    } else {
+        for (int t = 0; t < N_tracks; ++t) {
+            for (int b = 0; b < N_bboxes; ++b) {
+                if ((predicted[t].get_center() - bboxes[b].get_center()).squaredNorm() > D2) continue;
+                const double ov = predicted[t].overlap(bboxes[b]);
+                if (ov >= params_.track_match_iou)
+                    pairs.push_back({t, b, ov});
+            }
         }
     }
 
-    // Best overlap first for greedy assignment.
+    // Best score first for greedy assignment (no-op conflicts for Hungarian output).
     std::sort(pairs.begin(), pairs.end(),
         [](const Pair& a, const Pair& b){ return a.overlap > b.overlap; });
 
@@ -604,14 +895,26 @@ void DynamicClusterExtractor::update_tracks(
         Track& t = tracks_[p.t_idx];
 
         // Velocity estimation: displacement of the compensated center in m/s.
-        // t.center has already been transformed to the current frame (line ~497).
+        // t.center / t.velocity are already expressed in the current frame.
         if (dt > 0.0) {
-            const Eigen::Vector3d disp = bboxes[p.b_idx].get_center() - t.center;
+            const Eigen::Vector3d disp = (params_.use_centroid_association ? bboxes[p.b_idx].get_centroid()
+                                                                           : bboxes[p.b_idx].get_center()) - t.center;
             const Eigen::Vector3d vel_meas = disp / dt;
-            // EMA: rotate previous estimate into current frame before blending.
-            t.velocity = 0.6 * (T_to_current.rotation() * t.velocity) + 0.4 * vel_meas;
+            t.velocity = 0.6 * t.velocity + 0.4 * vel_meas;   // EMA
         }
         bboxes[p.b_idx].set_velocity(t.velocity);
+
+        // Window speed: displacement of the centroid w.r.t. the oldest stored bbox (all in the
+        // current frame, i.e. ego-motion compensated) divided by the elapsed frames.
+        if (dt > 0.0 && !t.bbox_history.empty()) {
+            const auto& old = t.bbox_history.front();
+            const double frames = static_cast<double>(t.bbox_history.size() + 1);
+            const Eigen::Vector3d disp = bboxes[p.b_idx].get_centroid() - old.get_centroid();
+            bboxes[p.b_idx].set_window_speed(disp.head<2>().norm() / (frames * dt));
+        } else if (dt > 0.0) {
+            const Eigen::Vector3d disp = bboxes[p.b_idx].get_centroid() - t.center;
+            bboxes[p.b_idx].set_window_speed(disp.head<2>().norm() / dt);
+        }
 
         // Push previous bbox (already in current frame) to history before overwriting.
         if (params_.track_bbox_history_size > 0) {
@@ -620,7 +923,22 @@ void DynamicClusterExtractor::update_tracks(
                 t.bbox_history.pop_front();
         }
 
-        t.center        = bboxes[p.b_idx].get_center();
+        t.center        = params_.use_centroid_association ? bboxes[p.b_idx].get_centroid() : bboxes[p.b_idx].get_center();
+        // A PERMANENT_DYNAMIC track that has stopped (window speed below permanent_release_speed for
+        // permanent_release_frames matched frames, e.g. a pedestrian standing still) goes back to the
+        // normal hysteresis. Objects that keep moving stay locked.
+        if (t.permanent_state == PermanentState::DYNAMIC && params_.permanent_release_speed > 0.0 && dt > 0.0) {
+            t.still_frames = bboxes[p.b_idx].get_window_speed() < params_.permanent_release_speed ? t.still_frames + 1 : 0;
+            if (t.still_frames >= params_.permanent_release_frames) {
+                t.permanent_state = PermanentState::NONE;
+                t.dynamic_frames  = 0;
+                t.static_frames   = 0;
+                t.still_frames    = 0;
+                t.evidence        = 0.0;   // frozen while locked: would keep is_confirmed() true
+                t.hold            = 0;
+                spdlog::debug("[tracker] track={} PERMANENT_DYNAMIC released (stopped)", t.id);
+            }
+        }
         // Permanent state overrides the hysteresis counter.
         if (t.permanent_state == PermanentState::DYNAMIC) {
             bboxes[p.b_idx].set_dynamic(true);
@@ -629,7 +947,7 @@ void DynamicClusterExtractor::update_tracks(
             bboxes[p.b_idx].set_dynamic(false);
             bboxes[p.b_idx].set_locked(true);
         } else {
-            bboxes[p.b_idx].set_dynamic(t.dynamic_frames >= params_.min_dynamic_frames);
+            bboxes[p.b_idx].set_dynamic(is_confirmed(t));
             bboxes[p.b_idx].set_locked(false);
         }
         t.last_bbox     = bboxes[p.b_idx];
@@ -642,25 +960,60 @@ void DynamicClusterExtractor::update_tracks(
                       t.center.x(), t.center.y(), t.center.z());
     }
 
+    // Confirmed-dynamic tracks left unmatched this frame (candidates for state inheritance).
+    std::vector<int> orphan;
+    if (params_.inherit_gate > 0.0)
+        for (int t = 0; t < N_tracks; ++t)
+            if (!track_matched[t] && (tracks_[t].permanent_state == PermanentState::DYNAMIC ||
+                                      (tracks_[t].permanent_state == PermanentState::NONE && is_confirmed(tracks_[t]))))
+                orphan.push_back(t);
+
     // Unmatched bboxes → new tracks.
     for (int b = 0; b < N_bboxes; ++b) {
         if (bbox_matched[b]) continue;
+        // ID switch: a new cluster close to the prediction of a confirmed track that lost its match
+        // inherits that track's dynamic state instead of restarting from static.
+        int heir = -1; double hd = std::numeric_limits<double>::max();
+        for (int oi : orphan) {
+            if (oi < 0) continue;
+            const double gate = params_.inherit_gate + params_.inherit_gate_per_range * bboxes[b].get_centroid().head<2>().norm();
+            const double d = (predicted[oi].get_centroid() - bboxes[b].get_centroid()).norm();
+            if (d <= gate && d < hd) { hd = d; heir = oi; }
+        }
         Track t;
         t.id            = next_track_id_++;
-        t.center        = bboxes[b].get_center();
+        t.center        = params_.use_centroid_association ? bboxes[b].get_centroid() : bboxes[b].get_center();
         t.last_bbox     = bboxes[b];
         t.age           = 1;
         t.missed_frames = 0;
         tracks_.push_back(t);
+        if (heir >= 0) {
+            const Track o = tracks_[heir];
+            Track& nt = tracks_.back();
+            nt.dynamic_frames = std::max(o.dynamic_frames, required_dynamic_frames(o));
+            nt.evidence = o.evidence; nt.velocity = o.velocity; nt.bbox_history = o.bbox_history;
+            for (int& oi : orphan) if (oi == heir) oi = -1;
+            tracks_[heir].missed_frames = params_.track_max_missed;   // the heir replaces it
+        }
         bboxes[b].set_track_id(t.id);
-        bboxes[b].set_dynamic(false);  // Mark tracks as dynamic for downstream use.
+        bboxes[b].set_dynamic(heir >= 0);  // New tracks start static (hysteresis) unless they inherit.
         spdlog::debug("[tracker] new track={} at ({:.2f},{:.2f},{:.2f})",
                       t.id, t.center.x(), t.center.y(), t.center.z());
     }
 
     // Increment missed frames and prune dead tracks.
-    for (int t = 0; t < N_tracks; ++t)
-        if (!track_matched[t]) tracks_[t].missed_frames++;
+    // Unmatched tracks coast with constant velocity so they can be re-acquired later.
+    for (int t = 0; t < N_tracks; ++t) {
+        if (track_matched[t]) continue;
+        Track& trk = tracks_[t];
+        trk.missed_frames++;
+        if (params_.use_motion_prediction && dt > 0.0) {
+            Eigen::Isometry3d shift = Eigen::Isometry3d::Identity();
+            shift.translation() = trk.velocity * dt;
+            trk.center = shift * trk.center;
+            trk.last_bbox.transform(shift);
+        }
+    }
 
     tracks_.erase(
         std::remove_if(tracks_.begin(), tracks_.end(),
@@ -685,7 +1038,48 @@ void DynamicClusterExtractor::update_dynamic_feedback(
     const std::vector<BoundingBox>& post_rejection_bboxes)
 {
     for (auto& track : tracks_) {
-        // Permanently locked tracks keep their state for their entire lifetime.
+        // PERMANENT_DYNAMIC keeps its state for the track lifetime.
+        // PERMANENT_STATIC is released after permanent_unlock_frames consecutive frames
+        // of strong motion evidence (e.g. a parked car that starts moving).
+        if (track.permanent_state == PermanentState::STATIC && params_.permanent_unlock_frames > 0) {
+            bool strong = false;
+            for (const auto& bbox : post_rejection_bboxes)
+                if (bbox.get_track_id() == track.id) { strong = bbox.has_strong_motion(); break; }
+            track.unlock_frames = strong ? track.unlock_frames + 1 : 0;
+            if (track.unlock_frames >= params_.permanent_unlock_frames) {
+                track.permanent_state = PermanentState::NONE;
+                track.static_frames   = 0;
+                track.dynamic_frames  = track.unlock_frames;   // strong motion counts as dynamic evidence
+                track.unlock_frames   = 0;
+                spdlog::debug("[tracker] track={} PERMANENT_STATIC released (strong motion)", track.id);
+            }
+            continue;
+        }
+        // A PERMANENT_DYNAMIC track can be handed over to static structure (the pedestrian walks away from a
+        // cabinet and the track keeps the cabinet; its window speed stays high because the association jumps,
+        // so permanent_release_speed does not catch it). Released after permanent_release_no_motion_frames
+        // matched frames in which its own cluster shows no motion evidence and stays in place.
+        if (track.permanent_state == PermanentState::DYNAMIC && params_.permanent_release_no_motion_frames > 0) {
+            for (const auto& bbox : post_rejection_bboxes) {
+                if (bbox.get_track_id() != track.id) continue;
+                if (bbox.has_own_motion()) { track.no_motion_frames = 0; break; }
+                if (track.no_motion_frames == 0) track.no_motion_anchor = bbox.get_centroid();
+                const bool moved = params_.permanent_release_max_disp > 0.0 &&
+                    (bbox.get_centroid() - track.no_motion_anchor).head<2>().norm() > params_.permanent_release_max_disp;
+                track.no_motion_frames = moved ? 0 : track.no_motion_frames + 1;
+                break;
+            }
+            if (track.no_motion_frames >= params_.permanent_release_no_motion_frames) {
+                track.permanent_state  = PermanentState::NONE;
+                track.dynamic_frames   = 0;
+                track.static_frames    = 0;
+                track.no_motion_frames = 0;
+                track.evidence         = 0.0;
+                track.hold             = 0;
+                spdlog::debug("[tracker] track={} PERMANENT_DYNAMIC released (no own motion)", track.id);
+                continue;
+            }
+        }
         if (track.permanent_state != PermanentState::NONE) {
             spdlog::debug("[tracker] track={} PERMANENT_{}", track.id,
                           track.permanent_state == PermanentState::DYNAMIC ? "DYNAMIC" : "STATIC");
@@ -695,11 +1089,26 @@ void DynamicClusterExtractor::update_dynamic_feedback(
         // Find the matching post-rejection bbox by track_id.
         bool is_dynamic_this_frame = false;
         bool found = false;
+        double frame_ev = -1.0; bool contrary = false;
         for (const auto& bbox : post_rejection_bboxes) {
             if (bbox.get_track_id() != track.id) continue;
             is_dynamic_this_frame = bbox.is_dynamic_bbox();
+            frame_ev = bbox.get_frame_evidence(); contrary = bbox.is_contrary();
             found = true;
             break;
+        }
+        // Track-level evidence (leaky accumulator) and hold of the confirmed state.
+        if (found && frame_ev >= 0.0)
+            track.evidence = std::min(params_.track_evidence_max,
+                std::max(-params_.track_evidence_max, params_.track_evidence_decay * track.evidence + frame_ev - params_.track_evidence_bias));
+        else if (!found)
+            track.evidence *= params_.track_evidence_decay;
+        if (params_.confirmed_hold_frames > 0) {
+            const bool strong = track.dynamic_frames + (is_dynamic_this_frame ? 1 : 0) >= required_dynamic_frames(track) ||
+                                (params_.track_evidence_on > 0.0 && track.evidence >= params_.track_evidence_on);
+            if (found && is_dynamic_this_frame && strong) track.hold = params_.confirmed_hold_frames;
+            else if (found && contrary)                   track.hold = 0;
+            else if (track.hold > 0)                      --track.hold;
         }
 
         // Missed frame (occluded / merged cluster): reset both counters.
@@ -707,8 +1116,9 @@ void DynamicClusterExtractor::update_dynamic_feedback(
         // evidence would let static_frames outrun age and trigger permanent
         // state on a track that has not yet been observed enough times.
         if (!found) {
-            track.static_frames  = 0;
-            track.dynamic_frames = 0;
+            // Missed / occluded: keep the counters (the track coasts), unless the
+            // legacy behaviour is requested.
+            if (params_.release_static_frames <= 0) { track.static_frames = 0; track.dynamic_frames = 0; }
             continue;
         }
 
@@ -717,7 +1127,11 @@ void DynamicClusterExtractor::update_dynamic_feedback(
             track.static_frames = 0;
         } else {
             track.static_frames++;
-            track.dynamic_frames = 0;
+            // Asymmetric hysteresis: a confirmed-dynamic track needs release_static_frames
+            // consecutive static frames before it is switched back to static.
+            const bool confirmed = track.dynamic_frames >= required_dynamic_frames(track);
+            if (!confirmed || params_.release_static_frames <= 0 || track.static_frames >= params_.release_static_frames)
+                track.dynamic_frames = 0;
         }
 
         // Check permanent state transitions (0 = feature disabled).
@@ -749,12 +1163,15 @@ std::vector<BoundingBox> DynamicClusterExtractor::get_dynamic_track_history() co
     std::vector<BoundingBox> result;
     for (const auto& t : tracks_) {
         if (t.bbox_history.empty()) continue;
-        const bool is_confirmed =
+        const bool confirmed =
             (t.permanent_state == PermanentState::DYNAMIC) ||
-            (t.permanent_state == PermanentState::NONE && t.dynamic_frames >= params_.min_dynamic_frames);
-        if (!is_confirmed) continue;
+            (t.permanent_state == PermanentState::NONE && is_confirmed(t));
+        if (!confirmed) continue;
         for (const auto& hbbox : t.bbox_history)
             result.push_back(hbbox);
+        // Coasting confirmed track (no cluster this frame): its predicted box also labels
+        // points that carry their own motion evidence.
+        if (params_.coast_label && t.missed_frames > 0) result.push_back(t.last_bbox);
     }
     spdlog::debug("[cluster_extractor] get_dynamic_track_history: {} historical bboxes", result.size());
     return result;

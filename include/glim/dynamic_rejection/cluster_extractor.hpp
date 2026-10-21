@@ -29,6 +29,12 @@ struct Track {
     int             dynamic_frames = 0;   ///< Consecutive frames confirmed dynamic by propagate_to_clusters()
     int             static_frames  = 0;   ///< Consecutive frames confirmed static by propagate_to_clusters()
     PermanentState  permanent_state = PermanentState::NONE;
+    int             unlock_frames  = 0;
+    int             still_frames   = 0;   ///< Consecutive matched frames below permanent_release_speed while PERMANENT_DYNAMIC
+    int             no_motion_frames = 0; ///< Consecutive matched frames without own motion evidence while PERMANENT_DYNAMIC
+    Eigen::Vector3d no_motion_anchor = Eigen::Vector3d::Zero();  ///< Cluster centroid when that run started (current sensor frame)
+    double          evidence = 0.0;       ///< Accumulated motion evidence (leaky sum of frame evidence - bias)
+    int             hold = 0;             ///< Frames the confirmed-dynamic state is still held without new evidence   ///< Consecutive strong-motion frames while PERMANENT_STATIC
     Eigen::Vector3d velocity = Eigen::Vector3d::Zero();  ///< EMA-smoothed velocity [m/s] in current sensor frame
     std::deque<BoundingBox> bbox_history;  ///< Recent past bboxes in current sensor frame (oldest front, newest back)
 };
@@ -72,6 +78,57 @@ public:
     int    permanent_dynamic_frames;  ///< Consecutive dynamic frames to lock track as permanently dynamic. 0 = disabled. Default: 10
     int    permanent_static_frames;   ///< Consecutive static frames to lock track as permanently static.  0 = disabled. Default: 10
     int    track_bbox_history_size;   ///< Number of past bboxes stored per track for historical inflated-zone checks. Default: 5
+    bool   use_motion_prediction;     ///< Predict track position with constant velocity before association. Default: true
+    double fast_track_speed;          ///< XY speed [m/s] above which a track uses fast_track_min_dynamic_frames. <= 0 = disabled. Default: 0 (1-frame hysteresis caused large false positives on indoor data)
+    int    fast_track_min_dynamic_frames; ///< Hysteresis for fast tracks (lower latency). Default: 1
+    bool   use_centroid_association;  ///< Associate by point-centroid distance (Hungarian) instead of bbox overlap (greedy). Default: true
+    double assoc_gate_base;           ///< Association gate [m] at range 0 for a track seen in the previous frame. Default: 0.8
+    double assoc_gate_per_range;      ///< Gate increase per metre of range. Default: 0.03
+    double assoc_gate_per_missed;     ///< Gate increase per missed frame. Default: 0.3
+    Eigen::Isometry3d T_imu_lidar = Eigen::Isometry3d::Identity();  ///< from config_sensors when apply_lidar_imu_extrinsic
+    int    release_static_frames;
+    // Performance / region of interest
+    bool   dbscan_voxel_hash;         ///< Neighbour search through a voxel-coordinate hash instead of a KD-tree.
+    int    dbscan_cell_range;         ///< Hash neighbourhood half-size in cells (1 = 26-neighbourhood, 2 = exact for eps <= 1.5 voxels).
+    double cluster_max_range;         ///< Voxels farther than this (XY) are not clustered (<= 0 = off).
+    double cluster_max_height;        ///< Voxels higher than this above the local ground are not clustered (<= 0 = off).
+    double cluster_ground_cell;
+    // Fragmentation
+    double eps_range_k;               ///< eps(r) = max(eps, eps_range_k * r): sparse far objects stay connected (0 = off).
+    bool   eps_range_vertical;        ///< Widen eps only along z (the ring gap), not in xy. Default: true
+    double frag_merge_gap;            ///< Merge bboxes whose AABB gap <= frag_merge_gap + frag_merge_gap_k * r (< 0 = off).
+    double frag_merge_gap_k;
+    /// Track-level evidence accumulation: e <- decay*e + (frame_evidence - bias), confirmed when e >= on (on <= 0 = off).
+    /// Yaw-oriented boxes (XY PCA) for elongated clusters with >= obb_min_points, eigenvalue ratio
+    /// >= obb_min_elongation, used only if the OBB footprint < obb_max_area_ratio * AABB footprint.
+    bool   use_obb;
+    int    obb_min_points;
+    double obb_min_elongation;
+    double obb_max_area_ratio;
+    double track_evidence_decay;
+    double track_evidence_bias;
+    double track_evidence_on;
+    double track_evidence_max;
+    /// Frames a confirmed-dynamic track stays dynamic without evidence (reset by contrary evidence; 0 = off).
+    int    confirmed_hold_frames;
+    /// A new track born within inherit_gate + k*r of the prediction of an unmatched confirmed track
+    /// inherits its dynamic state (<= 0 = off).
+    double inherit_gate;
+    double inherit_gate_per_range;
+    /// Predicted boxes of coasting confirmed tracks are used as historical boxes for labelling.
+    bool   coast_label;
+    /// Association cost = centroid distance + w * |size difference| (0 = distance only).
+    double assoc_size_weight;
+    double frag_max_len, frag_max_wid, frag_max_hgt;  ///< A merged bbox must stay within these sorted dimensions [m].       ///< XY cell size of the local ground estimate used by cluster_max_height.     ///< Consecutive static frames needed to switch a confirmed-dynamic track back to static (asymmetric hysteresis). 0 = immediate (legacy). Default: 0 (5 raised false removals on indoor data)
+    int    permanent_unlock_frames;   ///< Consecutive strong-motion frames that release a PERMANENT_STATIC track. 0 = never. Default: 2
+    double permanent_release_speed;   ///< PERMANENT_DYNAMIC track whose window speed stays below this [m/s] ... 0 = never released. Default: 0
+    int    permanent_release_frames;  ///< ... for this many consecutive matched frames is released (object stopped). Default: 10
+    int    permanent_release_no_motion_frames; ///< PERMANENT_DYNAMIC track whose cluster shows no motion of its own for this many
+                                               ///< matched frames is released: the track has been handed over to static structure.
+                                               ///< With locked_struct_frac > 0 "no own motion" = the cluster lies on static structure;
+                                               ///< otherwise = no free space and no strong voxel motion. 0 = off. Default: 3
+    double permanent_release_max_disp;         ///< ... and whose cluster centroid has moved less than this [m] (XY, ego-motion
+                                               ///< compensated) since the run started. <= 0 = no displacement check. Default: 0
 };
 
 // ===========================================================================
@@ -114,7 +171,12 @@ private:
     /// Read-only pass: propagate track ID and is_dynamic from track history onto fresh bboxes
     /// BEFORE NMS/merge so that bboxes with distinct known tracks are protected from
     /// suppression or absorption by each other.
-    void label_bboxes_from_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current) const;
+    void label_bboxes_from_tracks(std::vector<BoundingBox>& bboxes, const Eigen::Isometry3d& T_to_current, double dt) const;
+    /// Consecutive confirmed-dynamic frames required before the track is flagged dynamic.
+    int  required_dynamic_frames(const Track& t) const;
+    bool is_confirmed(const Track& t) const;
+    /// Track bbox moved to the current frame and shifted by velocity * dt (constant-velocity prediction).
+    BoundingBox predicted_bbox(const Track& t, const Eigen::Isometry3d& T_to_current, double dt) const;
 
     /// Match bboxes to tracks by overlap, assign IDs, create/prune tracks.
     /// dt: time elapsed since last call [s], used for velocity estimation (0 = skip).

@@ -1,6 +1,7 @@
 {
   "wall_filter": {
       "voxel_resolution": 0.25,
+      "rng_seed": -1,
       "ransac_max_iterations": 100,
       "ransac_inlier_threshold": 0.07,
       "ransac_min_inliers": 30,
@@ -11,6 +12,8 @@
       "floor_height_threshold": 0.5,
       "floor_ransac_inlier_threshold": 0.15,
       "max_planes": 8,
+      "wall_exclude_ground": true,
+      "wall_vertical_ransac": true,
       "wall_bbox_max_aspect_ratio": 5.0,
 
       "_comment_polar_floor": "=== Polar ground segmentation (replaces simple height threshold when enabled) ===",
