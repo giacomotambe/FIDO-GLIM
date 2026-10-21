@@ -1,0 +1,21 @@
+var searchData=
+[
+  ['max_5fcorrespondence_5fdistance_0',['max_correspondence_distance',['../structglim_1_1OdometryEstimationCTParams.html#a2bc29a4a1da466567ec14132d9bef5d3',1,'glim::OdometryEstimationCTParams']]],
+  ['max_5fiterations_1',['max_iterations',['../structglim_1_1OdometryEstimationCPUParams.html#ab101b33315e7d6cdbdfc1235056fd019',1,'glim::OdometryEstimationCPUParams']]],
+  ['max_5fobj_5fbottom_5fhag_2',['max_obj_bottom_hag',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#a869cf929924ef3ea7c60b9c94989e094',1,'glim::DynamicObjectRejectionParamsCPU']]],
+  ['max_5fobj_5ftop_5fhag_3',['max_obj_top_hag',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#a8f667421f14a034b6be7799748678d62',1,'glim::DynamicObjectRejectionParamsCPU']]],
+  ['memory_5fthreshold_5ffactor_4',['memory_threshold_factor',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#a4e512854c623067d952994efb0d97330',1,'glim::DynamicObjectRejectionParamsCPU']]],
+  ['merge_5fweight_5',['merge_weight',['../structglim_1_1WallBBoxRegistryConfig.html#a8e387dc96ee06b0080ee1b7727adc5dd',1,'glim::WallBBoxRegistryConfig']]],
+  ['min_5fcluster_5fvoxels_6',['min_cluster_voxels',['../structglim_1_1DynamicClusterExtractorParams.html#a9337a18cad5653edabe9f409c06cd4a9',1,'glim::DynamicClusterExtractorParams']]],
+  ['min_5fdynamic_5fframes_7',['min_dynamic_frames',['../structglim_1_1DynamicClusterExtractorParams.html#ad434629e764886ad03799e27376f6e61',1,'glim::DynamicClusterExtractorParams']]],
+  ['min_5fnormal_5fdot_8',['min_normal_dot',['../structglim_1_1WallBBoxRegistryConfig.html#a943c41995720d47e174956f10bd877bf',1,'glim::WallBBoxRegistryConfig']]],
+  ['min_5fobj_5fheight_9',['min_obj_height',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#ae504b87928fe2e4d820665b240088b84',1,'glim::DynamicObjectRejectionParamsCPU']]],
+  ['min_5fobj_5fspeed_10',['min_obj_speed',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#aff6b6463c2e7f8631ecf23a03d59b677',1,'glim::DynamicObjectRejectionParamsCPU']]],
+  ['min_5fobj_5fvis_11',['min_obj_vis',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#a7e479db2042b6f6d96093252610e119c',1,'glim::DynamicObjectRejectionParamsCPU']]],
+  ['min_5fobj_5fvis_5fmax_5frange_12',['min_obj_vis_max_range',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#a6d48138127d2b021c74cfdb4a590608c',1,'glim::DynamicObjectRejectionParamsCPU']]],
+  ['min_5fpoints_5ffor_5fbbox_13',['min_points_for_bbox',['../structglim_1_1DynamicClusterExtractorParams.html#ad18617f955a170f1c70f53c4ea658bac',1,'glim::DynamicClusterExtractorParams']]],
+  ['min_5fpts_14',['min_pts',['../structglim_1_1DynamicClusterExtractorParams.html#a43cbd63d98ae7074c982e7077d9a00ba',1,'glim::DynamicClusterExtractorParams']]],
+  ['min_5fshift_5fm_15',['min_shift_m',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#ac5d2b7124b9019422cd6ed4ec0aedf8d',1,'glim::DynamicObjectRejectionParamsCPU']]],
+  ['motion_5fthreshold_5fscale_16',['motion_threshold_scale',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#ac86be718a4f26ed50e7898764e4bf527',1,'glim::DynamicObjectRejectionParamsCPU']]],
+  ['moving_5fvis_5falt_17',['moving_vis_alt',['../structglim_1_1DynamicObjectRejectionParamsCPU.html#ad2ae7673c72b528e3eedffed81fd7057',1,'glim::DynamicObjectRejectionParamsCPU']]]
+];
