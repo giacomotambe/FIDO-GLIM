@@ -181,18 +181,41 @@ FIDO runs entirely on CPU; GLIM uses the GPU for scan matching.
 
 ## Results
 
-Point-level moving-object segmentation, labels evaluated on the full scan, with GLIM's own odometry in the loop (commit `30a4e05`, see [Evaluation](https://giacomotambe.github.io/FIDO-GLIM/evaluation.html) for protocol and the comparison with M-detector):
+Moving-object IoU measured on the same data with the same protocol for every method (runs of 1–20 Oct 2026). Learned methods use their published SemanticKITTI weights; on SemanticKITTI their published values are given instead (marked \*). HeLiMOS: official test split, pooled; DOALS: per-frame mean over the 10 annotated frames of each sequence (%); SemanticKITTI: pooled, label 0 ignored; CrossLab: our robot (VLP-16) in a motion-capture room with one walking person, labels from Qualisys.
 
-| Dataset | IoU < 20 m | IoU all |
-|---|---|---|
-| DOALS (8 sequences, mean per frame) | 74.8 | 71.7 |
-| HeLiMOS KAIST05, Ouster OS2-128 (test split) | 0.616 | 0.561 |
-| HeLiMOS KAIST05, Velodyne VLP-16 (test split) | 0.211 | 0.184 |
-| SemanticKITTI 07 (frames 0–559) | 0.627 | 0.562 |
+| Method | Type | HeLiMOS Ouster OS2-128 | HeLiMOS Velodyne VLP-16 | DOALS | SemanticKITTI 08 | CrossLab |
+|---|---|---|---|---|---|---|
+| **FIDO** | geometric | 0.53 | 0.35 | 73.9 | 0.26 | 0.900 |
+| Dynablox | geometric | 0.08 | 0.07 | 59.7 | 0.03 | 0.896 |
+| HMM-MOS | geometric | 0.54 | 0.20 | 73.5 | 0.05 | 0.407 |
+| M-detector | geometric | 0.26 | 0.22 | 71.1 | 0.09 | 0.752 |
+| LiDAR-MOS | learned | 0.02 | 0.02 | 1.9 | 0.664\* | 0.020 |
+| 4DMOS | learned | 0.73 | 0.35 | 79.7 | 0.772\* | 0.558 |
+| MapMOS | learned | 0.83 | 0.16 | 48.2 | 0.861\* | 0.026 |
 
-On 16-beam sensors recall is still low and there are almost no detections beyond 20 m.
+- FIDO is the best method without training on DOALS (77.4 within 20 m), SemanticKITTI 08 and CrossLab, and the most precise one without training on the Ouster (P 0.84) and on DOALS (P 0.91). On the VLP-16 it is level with 4DMOS.
+- The learned methods lead on the vehicle data they resemble (MapMOS 0.83 on the Ouster, 4DMOS 79.7 on DOALS) but need a GPU, and they miss most of the person on CrossLab.
+- On 16-beam sensors recall stays low (0.36): beyond ~20 m a pedestrian is one or two rings.
 
-The offline harness `kitti_dynamic_eval` (build with `-DBUILD_DYNAMIC_REJECTION_TESTS=ON`) reproduces these numbers on any sequence in SemanticKITTI layout.
+**Cost per scan** (ms, full scans, CPU work on the same 4 performance cores of an i7-13650HX, RTX 4060 Laptop for the learned methods):
+
+| Method | VLP-16 | OS2-128 | DOALS hauptgebaeude_1 | DOALS station_1 |
+|---|---|---|---|---|
+| **FIDO** (CPU) | 24 | 52 | 38 | 52 |
+| Dynablox (CPU, ≤ 20 m) | 37 | 53 | 57 | 52 |
+| M-detector (CPU) | 25 | 160 | 62 | 67 |
+| HMM-MOS (CPU) | 61 | 390 | 100 | 390 |
+| LiDAR-MOS (GPU) | 57 | 177 | 215 | 196 |
+| 4DMOS (GPU) | 104 | 858 | 265 | 466 |
+| MapMOS (GPU) | 205 | 924 | 248 | 914 |
+
+**Online in GLIM at 10 Hz** (whole pipeline, scan by scan in real time): FIDO takes 34 / 63 / 71 ms per scan on average on VLP-16 / OS1-64 / OS2-128, never more than 100 ms; every scan reaches the odometry and the pose latency is 56 / 94 / 105 ms.
+
+**Effect on the odometry.** On DOALS the trajectory is unchanged except in Shopville, the scene with the most pedestrians close to the sensor, where local drift (RPE) drops by 13–17%. On the HeLiMOS Ouster and on CrossLab the trajectory is the same with and without FIDO. On the HeLiMOS VLP-16 at car speed, LiDAR-only odometry drifts ~9 m per 100 m either way, and FIDO with the range-dependent clustering distance increases the rare large jumps (RPE 25 instead of 14 cm/m). With the robot standing still on a street (Marina di Pisa, 18 min) the largest pose excursion drops from 7.4 to 5.0 mm.
+
+**Configuration.** One configuration for every dataset (the shipped defaults) except the clustering distance, which follows the ring spacing of the sensor: `eps_range_k` 0.04 (VLP-16), 0.010 (OS1-64), 0.008 (HDL-64), 0.0035 (OS2-128); on the VLP-16 also `visibility_min_filter_rows: 4`. The shipped `eps_range_k` is 0: set it for your sensor. Poses: dataset poses, `glim_ros` without IMU with constant-velocity prediction.
+
+The offline harness `kitti_dynamic_eval` (build with `-DBUILD_DYNAMIC_REJECTION_TESTS=ON`) runs FIDO on any sequence in SemanticKITTI layout and evaluates it on the original scan points — see [Evaluation](https://giacomotambe.github.io/FIDO-GLIM/evaluation.html).
 
 ---
 

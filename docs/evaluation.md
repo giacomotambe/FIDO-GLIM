@@ -63,29 +63,71 @@ Quick diagnosis: dynamic share per frame low (1–3%) but precision ~7% → eval
 
 ## Results
 
-!!! info "Version"
-    The numbers below were measured on branch `fix/dynamic-rejection` at commit `30a4e05` (Oct 2026), before the last 20 commits merged in `67d6edc`, with the shipped configuration plus `apply_lidar_imu_extrinsic: false`, `rng_seed: 0` and the CT odometry. Labels are evaluated on the **full scan** (label of the nearest classified point within 0.5 m).
+Runs of 1–20 Oct 2026, every method on the same scans with the same protocol: labels on every point of the scan; HeLiMOS official test split (514 frames), label 0 ignored, pooled IoU; DOALS per-frame mean over the 10 annotated frames of each sequence (%); SemanticKITTI label 0 ignored, pooled. FIDO runs in this harness with dataset poses and `ros_cv`-style constant-velocity prediction, one configuration for every dataset except the clustering distance (`eps_range_k` 0.04 VLP-16, 0.010 OS1-64, 0.008 HDL-64, 0.0035 OS2-128; on the VLP-16 also `visibility_min_filter_rows: 4`). Learned methods use their published SemanticKITTI weights.
 
-| Dataset | Protocol | IoU < 20 m | IoU all | P / R (all) |
+### Moving-object IoU
+
+IoU all ranges (within 20 m), and precision / recall.
+
+| Method | HeLiMOS Ouster OS2-128 | HeLiMOS VLP-16 | DOALS | SemanticKITTI 08 |
 |---|---|---|---|---|
-| DOALS, 8 sequences | mean per frame, 10 annotated frames per sequence, GLIM odometry | 74.8 | 71.7 | 0.87 / 0.82 |
-| HeLiMOS KAIST05, Ouster OS2-128 | test split (514 frames), pooled, GLIM odometry | 0.616 | 0.561 | 0.80 / 0.65 |
-| HeLiMOS KAIST05, Velodyne VLP-16 | test split, pooled, GLIM odometry | 0.211 | 0.184 | 0.70 / 0.20 |
-| SemanticKITTI 07, frames 0–559 | pooled, dataset poses / GLIM odometry | 0.609 / 0.627 | 0.555 / 0.562 | 0.64 / 0.83 |
+| **FIDO** | 0.53 (0.61) · 0.84 / 0.60 | 0.35 (0.37) · 0.89 / 0.36 | 73.9 (77.4) | 0.26 (0.28) · 0.29 / 0.72 |
+| Dynablox | 0.08 (0.09) · 0.09 / 0.53 | 0.07 (0.07) · 0.09 / 0.24 | 59.7 (66.1) | 0.03 (0.03) · 0.03 / 0.51 |
+| HMM-MOS | 0.54 (0.59) · 0.64 / 0.78 | 0.20 (0.22) · 0.96 / 0.20 | 73.5 (75.5) | 0.05 (0.04) · 0.05 / 0.76 |
+| M-detector | 0.26 (0.30) · 0.30 / 0.64 | 0.22 (0.26) · 0.37 / 0.36 | 71.1 (77.3) | 0.09 (0.09) · 0.09 / 0.80 |
+| LiDAR-MOS | 0.02 (0.03) | 0.02 (0.02) | 1.9 (1.8) | 0.664 published |
+| 4DMOS | 0.73 (0.78) · 0.92 / 0.78 | 0.35 (0.41) · 0.77 / 0.39 | 79.7 (84.4) | 0.772 published |
+| MapMOS | 0.83 (0.88) · 0.95 / 0.87 | 0.16 (0.18) · 0.99 / 0.16 | 48.2 (49.2) | 0.861 published |
 
-With GLIM's own odometry in the loop the results match those with dataset poses, as long as the pose of the current scan is predicted.
+DOALS per scene, all ranges (%):
 
-**Comparison with M-detector** (Wu et al., *Nature Communications* 2024, geometric, no training), run on the same scans with the official `kitti1.yaml` thresholds adapted to each sensor's field of view. M-detector uses the dataset poses, FIDO its own GLIM odometry:
+| Method | Station | Shopville | HG | Niederdorf |
+|---|---|---|---|---|
+| **FIDO** | 69.9 | 71.4 | 77.6 | 76.7 |
+| HMM-MOS | 72.9 | 74.4 | 77.5 | 69.3 |
+| M-detector | 69.8 | 67.9 | 75.8 | 70.8 |
+| 4DMOS | 80.1 | 70.0 | 85.3 | 83.3 |
 
-| Dataset | FIDO | M-detector |
-|---|---|---|
-| DOALS (IoU < 20 m / all, mean per frame) | 74.8 / 71.7 | 80.3 / 75.2 |
-| HeLiMOS Ouster (pooled IoU) | 0.561 | 0.360 |
-| HeLiMOS VLP-16 (pooled IoU) | 0.184 | 0.194 |
-| SemanticKITTI 07, frames 0–559 (pooled IoU) | 0.562 | 0.498 |
+**CrossLab** — our robot (VLP-16 at 1.07 m, IMU) in a motion-capture room, 11 sequences, 6 300 scans, one person walking 0.7–6 m from the sensor; labels generated from Qualisys (points within 0.45 m of the person's vertical axis), pooled IoU:
 
-M-detector decides per point at full sensor resolution and is strongest on slow, dense scenes (DOALS, pedestrians); on a moving vehicle it flags static objects that become visible (precision 0.41 on HeLiMOS Ouster against FIDO's 0.80).
+| Method | P | R | IoU |
+|---|---|---|---|
+| **FIDO** | 0.95 | 0.95 | 0.900 |
+| Dynablox | 0.98 | 0.91 | 0.896 |
+| M-detector | 0.94 | 0.79 | 0.752 |
+| 4DMOS | 0.97 | 0.57 | 0.558 |
+| HMM-MOS | 0.97 | 0.41 | 0.407 |
 
-**Known limits.** On 16-beam sensors recall is low and nothing is detected beyond 20 m; objects longer than `bbox_max_extent` (4 m) get no box.
+Before the lock release on static structure (`locked_struct_frac`, `struct_min_age`, `permanent_release_no_motion_frames`) FIDO reached 0.753 here: a track locked dynamic on the person was handed over to a cabinet and kept removing furniture for over 100 frames. On the other datasets the release changes IoU by −0.001 to +0.005.
 
-**Time** (2-core test container; about half on an i7-13650HX): VLP-16 ~100 ms per frame (66 ms with the current `main` on a static-robot street sequence), Ouster OS2-128 ~290 ms; add the CT odometry when it runs in the loop.
+### Cost per scan
+
+Milliseconds, full scans, each method with the configuration of its IoU results, one method at a time on the same 4 performance cores of an i7-13650HX (RTX 4060 Laptop for the learned methods). FIDO: its own timer, without GLIM's preprocessing.
+
+| Method | VLP-16 | OS2-128 | DOALS hauptgebaeude_1 | DOALS station_1 |
+|---|---|---|---|---|
+| **FIDO** | 24 | 52 | 38 | 52 |
+| Dynablox (≤ 20 m) | 37 | 53 | 57 | 52 |
+| M-detector | 25 | 160 | 62 | 67 |
+| HMM-MOS | 61 | 390 | 100 | 390 |
+| LiDAR-MOS | 57 | 177 | 215 | 196 |
+| 4DMOS | 104 | 858 | 265 | 466 |
+| MapMOS | 205 | 924 | 248 | 914 |
+
+**Online in GLIM at 10 Hz** (preprocessing, FIDO, CT odometry, local and global mapping, real-time playback):
+
+| Sensor | FIDO mean / p99 [ms] | Scans over 100 ms | Pose latency without / with FIDO [ms] |
+|---|---|---|---|
+| HeLiMOS VLP-16 | 34 / 46 | 0% | 28 / 56 |
+| DOALS station_1 (OS1-64) | 63 / 73 | 0% | 39 / 94 |
+| HeLiMOS OS2-128 | 71 / 89 | 0% | 41 / 105 |
+
+### Effect on GLIM's trajectory
+
+RMSE against the reference poses, ATE after SE(3) alignment, RPE over 1 m.
+
+- **DOALS** (8 sequences): unchanged within ±2% except Shopville, the scene with the most pedestrians close to the sensor, where RPE drops by 13–17% and ATE by up to 10%.
+- **HeLiMOS Ouster** (whole KAIST05, 6.9 km): ATE 2.23 vs 2.20 m, same local drift; FIDO keeps up with real time over all 12 466 scans.
+- **HeLiMOS VLP-16**: LiDAR-only odometry at car speed drifts ~9 m per 100 m either way and the median step error is the same, but with the range-dependent clustering distance FIDO doubles the rare large jumps (RPE RMSE 25 instead of 14 cm/m).
+- **CrossLab** (against Qualisys): mean ATE 2.5 vs 2.4 cm, RPE 3.6 cm/m in both.
+- **Marina di Pisa** (robot standing still on a street, 18 min, GPU odometry with IMU): largest excursion 5.0 vs 7.4 mm, end-to-start offset 2.6 vs 5.6 mm, per-scan jitter −10%; ATE around the mean 1.45 vs 1.37 mm.
