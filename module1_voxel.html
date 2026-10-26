@@ -1,0 +1,1159 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="FIDO-GLIM: dynamic-object rejection for GLIM, a 3D range-based mapping framework">
+      
+      
+        <meta name="author" content="giacomotambe">
+      
+      
+        <link rel="canonical" href="https://giacomotambe.github.io/FIDO-GLIM/module1_voxel.html">
+      
+      
+        <link rel="prev" href="architecture.html">
+      
+      
+        <link rel="next" href="module2_bbox.html">
+      
+      
+        
+      
+      
+      <link rel="icon" href="assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Module 1 — Voxel pipeline - FIDO-GLIM</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="css/custom.css">
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#module-1-voxel-pipeline" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="index.html" title="FIDO-GLIM" class="md-header__button md-logo" aria-label="FIDO-GLIM" data-md-component="logo">
+      
+  <img src="assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            FIDO-GLIM
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Module 1 — Voxel pipeline
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="orange"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-purple" data-md-color-accent="orange"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/giacomotambe/FIDO-GLIM" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="index.html" title="FIDO-GLIM" class="md-nav__button md-logo" aria-label="FIDO-GLIM" data-md-component="logo">
+      
+  <img src="assets/logo.png" alt="logo">
+
+    </a>
+    FIDO-GLIM
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/giacomotambe/FIDO-GLIM" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="index.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="installation.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="docker.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker images
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="quickstart.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="architecture.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module 1 — Voxel pipeline
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="module1_voxel.html" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module 1 — Voxel pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-pose-of-the-scan-posekalmanfilter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0 · Pose of the scan — PoseKalmanFilter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-rejection-frame-make_rejection_frame" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1 · Rejection frame — make_rejection_frame
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-static-structure-wallfilter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2 · Static structure — WallFilter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-clusters-and-tracks-dynamicclusterextractor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3 · Clusters and tracks — DynamicClusterExtractor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-voxel-evidence-dynamicobjectrejectioncpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4 · Voxel evidence — DynamicObjectRejectionCPU
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-object-decision-propagate_to_clusters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5 · Object decision — propagate_to_clusters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-point-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6 · Point labels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-memory-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7 · Memory update
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-label-transfer-transfer_labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8 · Label transfer — transfer_labels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-changed-from-the-first-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What changed from the first version
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="module2_bbox.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Module 2 — Bounding box
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="parameters.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="tuning.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tuning guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="evaluation.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="faq.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FAQ
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="api.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API list
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#0-pose-of-the-scan-posekalmanfilter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        0 · Pose of the scan — PoseKalmanFilter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-rejection-frame-make_rejection_frame" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1 · Rejection frame — make_rejection_frame
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-static-structure-wallfilter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2 · Static structure — WallFilter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-clusters-and-tracks-dynamicclusterextractor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3 · Clusters and tracks — DynamicClusterExtractor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-voxel-evidence-dynamicobjectrejectioncpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4 · Voxel evidence — DynamicObjectRejectionCPU
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-object-decision-propagate_to_clusters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5 · Object decision — propagate_to_clusters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-point-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6 · Point labels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-memory-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7 · Memory update
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-label-transfer-transfer_labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8 · Label transfer — transfer_labels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-changed-from-the-first-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What changed from the first version
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="module-1-voxel-pipeline">Module 1 — Voxel pipeline</h1>
+<p><em>Autonomous — needs no external detector.</em></p>
+<p>Module 1 splits every scan into a <strong>static</strong> frame (sent to GLIM odometry) and a <strong>dynamic</strong> frame (held back). The decision is built in three layers:</p>
+<ol>
+<li><strong>per voxel</strong> — local evidence of motion (centroid shift, free space, vacated space);</li>
+<li><strong>per object</strong> — voxels are grouped into clusters, clusters are tracked over time and confirmed dynamic only when the evidence holds;</li>
+<li><strong>per point</strong> — the object decision is written back to the points, and from the rejection's own sample onto the odometry frame.</li>
+</ol>
+<pre class="mermaid"><code>flowchart LR
+  S[scan] --&gt; P[pose of the scan&lt;br/&gt;PoseKalmanFilter]
+  S --&gt; R[rejection frame&lt;br/&gt;10k raw points + far extras]
+  R --&gt; W[WallFilter&lt;br/&gt;ground, walls, outliers]
+  W --&gt; C[clusters + tracks]
+  C --&gt; E[voxel evidence&lt;br/&gt;shift · range images · free-space map]
+  E --&gt; D[object decision&lt;br/&gt;+ vacated space]
+  D --&gt; L[point labels]
+  L --&gt; T[label transfer&lt;br/&gt;to the odometry frame]
+  T --&gt; O[static → GLIM&lt;br/&gt;dynamic → diagnostics]
+  D --&gt; F[tracker feedback]
+  F -.-&gt; C</code></pre>
+<p>Everything below runs inside <code>AsyncDynamicObjectRejection::run()</code>, in this order. Defaults are the values shipped in <code>config/</code>.</p>
+<h2 id="0-pose-of-the-scan-posekalmanfilter">0 · Pose of the scan — <code>PoseKalmanFilter</code></h2>
+<p>Every stage reads the pose of the current scan from <code>PoseKalmanFilter::getFramePose()</code> (times <code>T_imu_lidar</code> when <code>apply_lidar_imu_extrinsic</code> is true).</p>
+<ul>
+<li><strong>With IMU</strong> — the filter integrates the IMU between SLAM updates; the pose is the IMU-propagated one.</li>
+<li><strong>Without IMU</strong> — the filter keeps the last two <em>stamped</em> SLAM poses and extrapolates them at constant velocity to the scan stamp (<code>set_frame_stamp</code>), up to 1 s.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">The pose of the current scan must be predicted</p>
+<p>The rejection of scan <em>t</em> runs before odometry has processed <em>t</em>. If the pose is simply the last odometry pose (one scan behind, no prediction), static structure appears to move: on HeLiMOS IoU &lt; 20 m drops from 72.8 to 62.4. Use an IMU, or stamped updates so the constant-velocity prediction kicks in.</p>
+</div>
+<h2 id="1-rejection-frame-make_rejection_frame">1 · Rejection frame — <code>make_rejection_frame</code></h2>
+<p>The rejection does not work on the odometry frame (which GLIM downsamples with a random grid). It builds its own input from the raw scan kept by the preprocessor:</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Keys</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Uniform random sample of the raw scan (1–100 m), seeded by the stamp</td>
+<td><code>rej_input_points</code></td>
+<td>10000</td>
+</tr>
+<tr>
+<td>Extra raw points far away, used only to decide (marked with time = NaN)</td>
+<td><code>hybrid_enabled</code>, <code>hybrid_min_range</code>, <code>hybrid_max_range</code>, <code>hybrid_max_points</code></td>
+<td>on, 20–40 m, 8000</td>
+</tr>
+<tr>
+<td>Past range images built from the raw scan</td>
+<td><code>vis_raw</code>, <code>vis_raw_max_range</code>, <code>vis_raw_max_points</code></td>
+<td>on, 70 m, 60000</td>
+</tr>
+</tbody>
+</table>
+<p>A uniform sample keeps the sensor's density profile, which the evidence below depends on. At the end the labels are transferred back to the odometry frame (step 8), so GLIM still receives exactly its own points.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The preprocessor attaches the raw scan only when <code>dynamic_rejection_type</code> in <code>config_ros.json</code> is not <code>"NONE"</code> and one of <code>hybrid_enabled</code>, <code>vis_raw</code>, <code>fs_raw</code> is on. Without it, the three steps above silently fall back to the odometry frame.</p>
+</div>
+<h2 id="2-static-structure-wallfilter">2 · Static structure — <code>WallFilter</code></h2>
+<p><code>WallFilter::filter()</code> voxelizes the rejection frame once (<code>voxel_resolution</code>, 0.25 m, Gaussian statistics per voxel) and flags structure, which is never dynamic:</p>
+<ol>
+<li><strong>Ground, every frame.</strong> Polar grid over voxel centroids (10° sectors × 0.5 m bins); per sector a seed cell between 2 and 15 m, propagated inwards and outwards while the slope stays below <code>floor_polar_slope_threshold</code> and the height below <code>floor_polar_max_ground_height</code>. A RANSAC plane is then fitted to the ground voxels; its box defines <code>is_ground</code>.</li>
+<li><strong>Walls.</strong> Vertical 2-point RANSAC on the non-ground voxels (<code>wall_vertical_ransac</code>), up to <code>max_planes</code> planes. Wall planes are turned into oriented boxes and merged into the <strong><code>WallBBoxRegistry</code></strong>, which persists across frames (matched by normal, centre distance and OBB IoU; union of the boxes, thickness clamped to <code>max_wall_thickness</code>). Voxels inside a registry box get <code>is_wall</code>.</li>
+<li><strong>Outliers.</strong> Voxels behind a registry wall, seen from the sensor, get <code>is_outlier</code>.</li>
+</ol>
+<p>Height above ground (HAG) for the later stages is computed separately: the lowest voxel centroid in the 3×3 block of <code>ground_cell_m</code> (2 m) cells around each voxel.</p>
+<h2 id="3-clusters-and-tracks-dynamicclusterextractor">3 · Clusters and tracks — <code>DynamicClusterExtractor</code></h2>
+<ol>
+<li><strong>DBSCAN on voxels</strong> — non-structural voxels within <code>cluster_max_range</code> (70 m) and below <code>cluster_max_height</code> (4 m) above ground; neighbours found with a voxel hash; <code>eps = eps_voxel_factor × voxel_resolution</code> (0.375 m). <code>eps_range_k</code> optionally widens eps along <em>z</em> far from the sensor, for sparse rings (VLP-16 ≈ 0.04).</li>
+<li><strong>Boxes</strong> — one AABB per cluster, filtered by size (<code>bbox_min_extent</code> 0.1 m – <code>bbox_max_extent</code> 4 m) and volume.</li>
+<li><strong>NMS</strong>, then <strong>fragment merge</strong> — two boxes merge if their gap is &lt; <code>frag_merge_gap + frag_merge_gap_k · r</code> (0.5 m + 0.02·r) and the union stays object-sized (<code>frag_max_len/wid/hgt</code> 6 × 3 × 4 m). The merged box remembers its <strong>parts</strong>, so points are later labelled only inside the parts.</li>
+<li><strong>Tracking</strong> — tracks are predicted at constant velocity; boxes are associated by <strong>Hungarian assignment</strong> on centroid distance, with gate <code>assoc_gate_base + assoc_gate_per_range · r + assoc_gate_per_missed · missed</code> (0.8 + 0.03·r + 0.3·missed), solved per connected component. Unmatched tracks coast for up to <code>track_max_missed</code> (5) frames.</li>
+</ol>
+<p>A track is <strong>confirmed dynamic</strong> when any of these holds:</p>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Keys</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Consecutive dynamic frames (hysteresis)</td>
+<td><code>min_dynamic_frames</code></td>
+<td>2</td>
+</tr>
+<tr>
+<td>Leaky evidence accumulator: <code>e ← decay·e + (evidence − bias)</code>, confirmed when <code>e ≥ on</code></td>
+<td><code>track_evidence_decay</code>, <code>_bias</code>, <code>_on</code>, <code>_max</code></td>
+<td>0.8, 0.6, 0.5, 2.0</td>
+</tr>
+<tr>
+<td>Locked state after N dynamic frames</td>
+<td><code>permanent_dynamic_frames</code></td>
+<td>8</td>
+</tr>
+</tbody>
+</table>
+<p>The accumulator confirms small or far objects that never pass the single-frame test, while the bias keeps the noise of static clusters out.</p>
+<p><strong>Locks and their release.</strong> After <code>permanent_dynamic_frames</code> (8) dynamic frames a track is locked dynamic; after <code>permanent_static_frames</code> (20) static frames it is locked static. Locks are not final:</p>
+<ul>
+<li>a static lock is released after <code>permanent_unlock_frames</code> (2) frames of strong motion (dynamic ratio &gt; <code>unlock_ratio_factor</code> × threshold, or vacated space);</li>
+<li>a dynamic lock is released after <code>permanent_release_no_motion_frames</code> (3) matched frames without own motion — e.g. when the track has been handed over to a cabinet or a wall;</li>
+<li>a locked-dynamic cluster is not removed in a frame if it lies for ≥ <code>locked_struct_frac</code> (70%) on static structure of the free-space map (cells occupied for <code>struct_min_age</code> frames and never seen free since), or if its box is taller than <code>locked_max_height</code> (2.5 m).</li>
+</ul>
+<h2 id="4-voxel-evidence-dynamicobjectrejectioncpu">4 · Voxel evidence — <code>DynamicObjectRejectionCPU</code></h2>
+<p>The module keeps 14 frames of history (voxel maps, poses, range images). For every non-structural voxel above the ground band (<code>ground_band_m</code>, 0.25 m):</p>
+<p><strong>a. Centroid shift against t−5</strong> (<code>compare_baseline_frames</code>). The past voxel is found after ego-motion compensation, and the shift beyond a <strong>noise dead zone</strong> is scored:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>σ(r)  = min(noise_sigma_max, noise_sigma0 + noise_sigma_slope · r)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>        + pose_err_trans_k · ‖t_baseline‖ + pose_err_rot_k · θ_baseline · r
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>score = w_shift · max(0, |shift| − noise_deadzone_k · σ(r)) / voxel_resolution
+</code></pre></div>
+<p>Defaults: σ0 0.045 m, slope 0.007, max 0.10 m, k = 3, <code>w_shift</code> 1.2. The σ model is sensor-specific and is the first thing to re-tune on a new LiDAR.</p>
+<p><strong>b. Free space in past range images.</strong> Each point is projected into the range images of the scans at t−6, t−10, t−14 (<code>visibility_min_age</code>, <code>_max_age</code>, <code>_age_step</code>; 0.5° cells, 3×3 minimum filter). If the sensor used to see farther along that ray (by more than <code>max(visibility_abs_thr, visibility_rel_thr · d)</code> = max(0.3 m, 3%)), the point now occupies space that was free. A strict majority of the scans that see the cell decides. The voxel's <code>vis</code> is the fraction of its points that appeared in free space.</p>
+<p><strong>c. Free-space world map</strong> (<code>fs_enabled</code>). A sharded hash grid in the world frame (<code>fs_res</code> 0.3 m) counts, frame after frame, how often each cell was crossed by a ray (free) or hit (occupied). A point is evidence of motion if its cell was seen free ≥ <code>fs_min_free</code> (5) times and ≥ <code>fs_free_ratio</code> (5) × occupied, <strong>and</strong> all 26 neighbours are free too (<code>fs_dilate</code>, a DUFOMap-like dilation — without it poles and edges are "emptied" by rays). It gives long memory without storing scans. <code>vis</code> becomes the maximum of (b) and (c). Rays are integrated in parallel, one every <code>fs_ray_stride</code> (4) points, up to <code>fs_max_range</code> (60 m).</p>
+<p><strong>Score and thresholds.</strong> <code>score += w_visibility · vis</code> (0.5); <code>score −= w_history · (fraction of the last frames where the voxel was static)</code> (0.3). The voxel is dynamic if the score passes a three-tier threshold on <code>dynamic_score_threshold</code> (0.08):</p>
+<table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>Factor</th>
+<th>Threshold</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inside a dynamic box (or its velocity-inflated zone)</td>
+<td><code>tier1_threshold_factor</code> 0.55</td>
+<td>0.044</td>
+</tr>
+<tr>
+<td>Dynamic at t−1</td>
+<td><code>memory_threshold_factor</code> 0.70</td>
+<td>0.056</td>
+</tr>
+<tr>
+<td>Isolated</td>
+<td><code>unconstrained_threshold_factor</code> 3.0</td>
+<td>0.24</td>
+</tr>
+</tbody>
+</table>
+<p>A voxel with no match in the past is decided by free space alone. Dynamic voxels then add <code>w_neighbor</code> (0.2) to their 26 neighbours.</p>
+<h2 id="5-object-decision-propagate_to_clusters">5 · Object decision — <code>propagate_to_clusters</code></h2>
+<p>For each box: <strong>ratio</strong> = dynamic voxels / voxels, <strong>vis</strong> = mean free-space fraction. The cluster is dynamic in this frame if</p>
+<ul>
+<li>ratio &gt; <code>cluster_propagation_threshold</code> (0.45), <strong>and</strong></li>
+<li>shape is plausible: height ≥ <code>min_obj_height</code> (0.2 m), lowest point ≤ <code>max_obj_bottom_hag</code> (1.5 m) and highest ≤ <code>max_obj_top_hag</code> (2.3 m) above ground, <strong>and</strong></li>
+<li>it moves: track speed ≥ <code>min_obj_speed</code> (0.1 m/s) or vis ≥ <code>moving_vis_alt</code> (0.3), <strong>and</strong></li>
+<li>it was seen in free space: vis ≥ <code>min_obj_vis</code> (0.3);</li>
+</ul>
+<p><strong>or</strong> it passes the <strong>vacated-space</strong> test (<code>vac_enable</code>): the points the track occupied ≥ <code>vac_gap_frames</code> (8) frames ago, after a displacement ≥ <code>vac_min_disp</code> (0.6 m), are now seen through by the current scan (≥ 80% of the visible ones, ≥ 4 points), with a constant-velocity check on the midpoint. This catches objects whose own points carry little evidence.</p>
+<p>This per-frame verdict is fed back to the tracker (step 3). A box is <strong>removed</strong> in the current frame only if its track is already confirmed, or by <strong>fast confirmation</strong> (ratio &gt; 2 × threshold and vis ≥ 0.2).</p>
+<p>Optional, off by default: <strong>delayed decision</strong> (<code>fut_delay</code> &gt; 0) — wait D frames and also test the points against the <em>future</em> range images. On HeLiMOS <code>fut_delay: 10</code> raised IoU &lt; 20 m by about 2 points, at the cost of 1 s of latency (offline mapping only).</p>
+<h2 id="6-point-labels">6 · Point labels</h2>
+<ul>
+<li>Voxels inside the parts of a removed box → dynamic. A foot rule keeps near-ground voxels (HAG ≥ <code>foot_min_hag</code>, 0.10 m) under a tall confirmed box dynamic.</li>
+<li>Voxels in the velocity-inflated zone of a dynamic box (<code>config_bbox_rejection.json</code>) or in recent boxes of confirmed tracks → dynamic <strong>only with their own evidence</strong> (<code>inflated_requires_evidence</code>).</li>
+<li>Beyond <code>point_ground_cut_min_range</code> (10 m), points less than <code>point_ground_cut</code> (0.2 m) above ground stay static: they are ground returns inside the box.</li>
+<li>Everything else is static: at default the output is decided per object, never by isolated voxels.</li>
+<li><strong>Anomalous-frame guard</strong>: if more than <code>frame_max_dynamic_frac</code> (10%) of the points come out dynamic — typically a pose error — only the bases of confirmed objects are kept dynamic.</li>
+</ul>
+<h2 id="7-memory-update">7 · Memory update</h2>
+<p>The voxel map, pose and range image of the frame enter the history (14 frames); the scan is integrated into the free-space map (after the query, so a scan never votes on itself).</p>
+<h2 id="8-label-transfer-transfer_labels">8 · Label transfer — <code>transfer_labels</code></h2>
+<p>The labels found on the rejection frame are copied onto the odometry frame: each odometry point takes the label of its nearest labelled point within <code>label_transfer_radius</code> (0.5 m), static on ties and when nothing is within reach. The static frame reuses the preprocessing neighbours wherever possible, so GLIM's covariance estimation is not repeated.</p>
+<h2 id="what-changed-from-the-first-version">What changed from the first version</h2>
+<p>The first version scored each voxel against the previous frame only (<code>w_shift</code>, <code>w_cluster</code>, <code>w_distance</code>, ego-motion-scaled thresholds) and propagated a cluster as soon as its dynamic ratio crossed a threshold. The current pipeline adds the noise dead zone, free space (range images and world map), vacated space, Hungarian tracking with evidence accumulation and lock release, the separate uniform rejection frame and label transfer, and the pose prediction without IMU. The legacy keys are still read but set to 0 — see <a href="parameters.html#legacy-and-experimental-keys">Configuration reference</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2026 giacomotambe — extends GLIM, Copyright &copy; 2021&ndash;2024 Kenji Koide
+
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/giacomotambe/FIDO-GLIM" target="_blank" rel="noopener" title="FIDO-GLIM on GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+    <a href="https://github.com/koide3/glim" target="_blank" rel="noopener" title="upstream GLIM" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tracking", "navigation.top", "navigation.expand", "content.code.copy", "toc.follow"], "search": "assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>
