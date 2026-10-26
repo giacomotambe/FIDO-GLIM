@@ -63,56 +63,30 @@ Quick diagnosis: dynamic share per frame low (1–3%) but precision ~7% → eval
 
 ## Results
 
-Runs of 1–20 Oct 2026, every method on the same scans with the same protocol: labels on every point of the scan; HeLiMOS official test split (514 frames), label 0 ignored, pooled IoU; DOALS per-frame mean over the 10 annotated frames of each sequence (%); SemanticKITTI label 0 ignored, pooled. FIDO runs in this harness with dataset poses and `ros_cv`-style constant-velocity prediction, one configuration for every dataset except the clustering distance (`eps_range_k` 0.04 VLP-16, 0.010 OS1-64, 0.008 HDL-64, 0.0035 OS2-128; on the VLP-16 also `visibility_min_filter_rows: 4`). Learned methods use their published SemanticKITTI weights.
+Runs of 1–20 Oct 2026, labels on every point of the scan: HeLiMOS official test split (514 frames), label 0 ignored, pooled IoU; DOALS per-frame mean over the 10 annotated frames of each sequence (%); SemanticKITTI label 0 ignored, pooled. FIDO runs in this harness with dataset poses and `ros_cv`-style constant-velocity prediction, one configuration for every dataset except the clustering distance (`eps_range_k` 0.04 VLP-16, 0.010 OS1-64, 0.008 HDL-64, 0.0035 OS2-128; on the VLP-16 also `visibility_min_filter_rows: 4`).
 
 ### Moving-object IoU
 
-IoU all ranges (within 20 m), and precision / recall.
-
-| Method | HeLiMOS Ouster OS2-128 | HeLiMOS VLP-16 | DOALS | SemanticKITTI 08 |
+| Dataset | IoU all ranges | IoU within 20 m | Precision | Recall |
 |---|---|---|---|---|
-| **FIDO** | 0.53 (0.61) · 0.84 / 0.60 | 0.35 (0.37) · 0.89 / 0.36 | 73.9 (77.4) | 0.26 (0.28) · 0.29 / 0.72 |
-| Dynablox | 0.08 (0.09) · 0.09 / 0.53 | 0.07 (0.07) · 0.09 / 0.24 | 59.7 (66.1) | 0.03 (0.03) · 0.03 / 0.51 |
-| HMM-MOS | 0.54 (0.59) · 0.64 / 0.78 | 0.20 (0.22) · 0.96 / 0.20 | 73.5 (75.5) | 0.05 (0.04) · 0.05 / 0.76 |
-| M-detector | 0.26 (0.30) · 0.30 / 0.64 | 0.22 (0.26) · 0.37 / 0.36 | 71.1 (77.3) | 0.09 (0.09) · 0.09 / 0.80 |
-| LiDAR-MOS | 0.02 (0.03) | 0.02 (0.02) | 1.9 (1.8) | 0.664 published |
-| 4DMOS | 0.73 (0.78) · 0.92 / 0.78 | 0.35 (0.41) · 0.77 / 0.39 | 79.7 (84.4) | 0.772 published |
-| MapMOS | 0.83 (0.88) · 0.95 / 0.87 | 0.16 (0.18) · 0.99 / 0.16 | 48.2 (49.2) | 0.861 published |
+| HeLiMOS KAIST05, Ouster OS2-128 | 0.53 | 0.61 | 0.84 | 0.60 |
+| HeLiMOS KAIST05, Velodyne VLP-16 | 0.35 | 0.37 | 0.89 | 0.36 |
+| DOALS (8 sequences, %) | 73.9 | 77.4 | — | — |
+| SemanticKITTI 08 | 0.26 | 0.28 | 0.29 | 0.72 |
 
-DOALS per scene, all ranges (%):
+DOALS per scene, per-frame mean IoU (%), all ranges / within 20 m: Station 69.9 / 77.4, Shopville 71.4 / 72.7, HG 77.6 / 79.7, Niederdorf 76.7 / 79.7.
 
-| Method | Station | Shopville | HG | Niederdorf |
-|---|---|---|---|---|
-| **FIDO** | 69.9 | 71.4 | 77.6 | 76.7 |
-| HMM-MOS | 72.9 | 74.4 | 77.5 | 69.3 |
-| M-detector | 69.8 | 67.9 | 75.8 | 70.8 |
-| 4DMOS | 80.1 | 70.0 | 85.3 | 83.3 |
-
-**CrossLab** — our robot (VLP-16 at 1.07 m, IMU) in a motion-capture room, 11 sequences, 6 300 scans, one person walking 0.7–6 m from the sensor; labels generated from Qualisys (points within 0.45 m of the person's vertical axis), pooled IoU:
-
-| Method | P | R | IoU |
-|---|---|---|---|
-| **FIDO** | 0.95 | 0.95 | 0.900 |
-| Dynablox | 0.98 | 0.91 | 0.896 |
-| M-detector | 0.94 | 0.79 | 0.752 |
-| 4DMOS | 0.97 | 0.57 | 0.558 |
-| HMM-MOS | 0.97 | 0.41 | 0.407 |
+**CrossLab** — our robot (VLP-16 at 1.07 m, IMU) in a motion-capture room, 11 sequences, 6 300 scans, one person walking 0.7–6 m from the sensor; labels generated from Qualisys (points within 0.45 m of the person's vertical axis), pooled: precision 0.95, recall 0.95, IoU 0.900.
 
 Before the lock release on static structure (`locked_struct_frac`, `struct_min_age`, `permanent_release_no_motion_frames`) FIDO reached 0.753 here: a track locked dynamic on the person was handed over to a cabinet and kept removing furniture for over 100 frames. On the other datasets the release changes IoU by −0.001 to +0.005.
 
 ### Cost per scan
 
-Milliseconds, full scans, each method with the configuration of its IoU results, one method at a time on the same 4 performance cores of an i7-13650HX (RTX 4060 Laptop for the learned methods). FIDO: its own timer, without GLIM's preprocessing.
+FIDO's own timer, full scans, without GLIM's preprocessing, on 4 performance cores of an i7-13650HX (CPU only):
 
-| Method | VLP-16 | OS2-128 | DOALS hauptgebaeude_1 | DOALS station_1 |
-|---|---|---|---|---|
-| **FIDO** | 24 | 52 | 38 | 52 |
-| Dynablox (≤ 20 m) | 37 | 53 | 57 | 52 |
-| M-detector | 25 | 160 | 62 | 67 |
-| HMM-MOS | 61 | 390 | 100 | 390 |
-| LiDAR-MOS | 57 | 177 | 215 | 196 |
-| 4DMOS | 104 | 858 | 265 | 466 |
-| MapMOS | 205 | 924 | 248 | 914 |
+| VLP-16 | OS2-128 | DOALS hauptgebaeude_1 | DOALS station_1 |
+|---|---|---|---|
+| 24 ms | 52 ms | 38 ms | 52 ms |
 
 **Online in GLIM at 10 Hz** (preprocessing, FIDO, CT odometry, local and global mapping, real-time playback):
 
