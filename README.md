@@ -181,33 +181,19 @@ FIDO runs entirely on CPU; GLIM uses the GPU for scan matching.
 
 ## Results
 
-Moving-object IoU measured on the same data with the same protocol for every method (runs of 1–20 Oct 2026). Learned methods use their published SemanticKITTI weights; on SemanticKITTI their published values are given instead (marked \*). HeLiMOS: official test split, pooled; DOALS: per-frame mean over the 10 annotated frames of each sequence (%); SemanticKITTI: pooled, label 0 ignored; CrossLab: our robot (VLP-16) in a motion-capture room with one walking person, labels from Qualisys.
+Moving-object segmentation on public benchmarks and on our robot (runs of 1–20 Oct 2026), labels evaluated on every point of the scan. HeLiMOS: official test split, label 0 ignored, pooled IoU; DOALS: per-frame mean over the 10 annotated frames of each sequence (%); SemanticKITTI: label 0 ignored, pooled; CrossLab: our robot (VLP-16) in a motion-capture room with one walking person, labels from Qualisys.
 
-| Method | Type | HeLiMOS Ouster OS2-128 | HeLiMOS Velodyne VLP-16 | DOALS | SemanticKITTI 08 | CrossLab |
-|---|---|---|---|---|---|---|
-| **FIDO** | geometric | 0.53 | 0.35 | 73.9 | 0.26 | 0.900 |
-| Dynablox | geometric | 0.08 | 0.07 | 59.7 | 0.03 | 0.896 |
-| HMM-MOS | geometric | 0.54 | 0.20 | 73.5 | 0.05 | 0.407 |
-| M-detector | geometric | 0.26 | 0.22 | 71.1 | 0.09 | 0.752 |
-| LiDAR-MOS | learned | 0.02 | 0.02 | 1.9 | 0.664\* | 0.020 |
-| 4DMOS | learned | 0.73 | 0.35 | 79.7 | 0.772\* | 0.558 |
-| MapMOS | learned | 0.83 | 0.16 | 48.2 | 0.861\* | 0.026 |
-
-- FIDO is the best method without training on DOALS (77.4 within 20 m), SemanticKITTI 08 and CrossLab, and the most precise one without training on the Ouster (P 0.84) and on DOALS (P 0.91). On the VLP-16 it is level with 4DMOS.
-- The learned methods lead on the vehicle data they resemble (MapMOS 0.83 on the Ouster, 4DMOS 79.7 on DOALS) but need a GPU, and they miss most of the person on CrossLab.
-- On 16-beam sensors recall stays low (0.36): beyond ~20 m a pedestrian is one or two rings.
-
-**Cost per scan** (ms, full scans, CPU work on the same 4 performance cores of an i7-13650HX, RTX 4060 Laptop for the learned methods):
-
-| Method | VLP-16 | OS2-128 | DOALS hauptgebaeude_1 | DOALS station_1 |
+| Dataset | IoU all ranges | IoU within 20 m | Precision | Recall |
 |---|---|---|---|---|
-| **FIDO** (CPU) | 24 | 52 | 38 | 52 |
-| Dynablox (CPU, ≤ 20 m) | 37 | 53 | 57 | 52 |
-| M-detector (CPU) | 25 | 160 | 62 | 67 |
-| HMM-MOS (CPU) | 61 | 390 | 100 | 390 |
-| LiDAR-MOS (GPU) | 57 | 177 | 215 | 196 |
-| 4DMOS (GPU) | 104 | 858 | 265 | 466 |
-| MapMOS (GPU) | 205 | 924 | 248 | 914 |
+| HeLiMOS KAIST05, Ouster OS2-128 | 0.53 | 0.61 | 0.84 | 0.60 |
+| HeLiMOS KAIST05, Velodyne VLP-16 | 0.35 | 0.37 | 0.89 | 0.36 |
+| DOALS (8 sequences, %) | 73.9 | 77.4 | — | — |
+| SemanticKITTI 08 | 0.26 | 0.28 | 0.29 | 0.72 |
+| CrossLab (11 sequences) | 0.900 | — | 0.95 | 0.95 |
+
+On 16-beam sensors recall stays low: beyond ~20 m a pedestrian is one or two rings.
+
+**Cost per scan** (FIDO's own timer, full scans, 4 performance cores of an i7-13650HX, CPU only): 24 ms on a VLP-16, 52 ms on an OS2-128, 38–52 ms on DOALS (OS1-64).
 
 **Online in GLIM at 10 Hz** (whole pipeline, scan by scan in real time): FIDO takes 34 / 63 / 71 ms per scan on average on VLP-16 / OS1-64 / OS2-128, never more than 100 ms; every scan reaches the odometry and the pose latency is 56 / 94 / 105 ms.
 
