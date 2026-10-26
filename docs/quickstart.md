@@ -17,6 +17,9 @@ glim/config/config_ros.json
 !!! tip
     `dynamic_rejection_type` is off (`"NONE"`) by default — set it to `"CLUSTER"` (Module 1), `"BBOX"` (Module 2), or `"COMBINED"` (both) to actually enable FIDO. See [FAQ](faq.md#which-dynamic_rejection_type-should-i-use) for guidance on which to pick.
 
+!!! note "The rejection needs the raw scan"
+    With `dynamic_rejection_type` other than `"NONE"` the preprocessor keeps the raw scan for the rejection (uniform 10k-point sample, far extra points, raw range images). Also check `apply_lidar_imu_extrinsic` and, without IMU, the CT odometry — see [Configuration reference](parameters.md#before-you-start).
+
 !!! warning
     On ROS 2 you need to re-run `colcon build` to apply config changes in the installed package — use `--symlink-install` to avoid this.
 
@@ -69,7 +72,8 @@ Comments (`//`, `/* */`) are allowed — `glim::Config` strips them before parsi
 Once `dynamic_rejection_type` is set, every incoming scan is split into a static frame (forwarded into GLIM's normal odometry path) and a dynamic frame (published separately for diagnostics/visualization) before it ever reaches scan matching. The full mechanics are in:
 
 - [Architecture](architecture.md) — the producer&ndash;consumer thread and its queues
-- [Module 1 — Voxel pipeline](module1_voxel.md) — the five-stage autonomous filter
+- [Module 1 — Voxel pipeline](module1_voxel.md) — the autonomous filter, step by step
+- [Tuning guide](tuning.md) — adapting it to a new sensor or scene
 - [Module 2 — Bounding box](module2_bbox.md) — the detector-driven filter
 
 ## Setup your own sensor

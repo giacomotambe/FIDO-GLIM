@@ -94,6 +94,7 @@ sudo make install
 | `BUILD_WITH_MARCH_NATIVE` | `OFF` | Adds `-march=native` to C/C++ flags. |
 | `BUILD_WITH_DYNAMIC_REJECTION_BBOX` | `ON` | Compiles [Module 2](module2_bbox.md) in; sets `GLIM_USE_DYNAMIC_REJECTION_BBOX=1`. |
 | `BUILD_WITH_DYNAMIC_REJECTION_VOXEL` | `OFF` | Compiles [Module 1](module1_voxel.md)'s standalone define in; sets `GLIM_USE_DYNAMIC_REJECTION_VOXEL=1`. Mutually exclusive with the `BBOX` flag — `BBOX` wins if both are `ON`. |
+| `BUILD_DYNAMIC_REJECTION_TESTS` | `OFF` | Builds `test_dynamic_rejection` and the offline harness `kitti_dynamic_eval` — see [Evaluation](evaluation.md). |
 
 !!! warning "Reading the CMake carefully"
     All `dynamic_rejection/*.cpp` sources are compiled unconditionally into `libglim` regardless of these two flags — they only toggle the `GLIM_USE_DYNAMIC_REJECTION_*` preprocessor defines consumers can branch on. A separate `BUILD_WITH_DYNAMIC_REJECTION` guard also appears further down in `CMakeLists.txt` guarding `GLIM_USE_DYNAMIC_REJECTION`, but no matching `option()` ever sets it — that branch is effectively dead. The two flags above are the ones that do something.
