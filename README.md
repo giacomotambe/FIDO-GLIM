@@ -18,7 +18,7 @@ Most LiDAR SLAM pipelines assume a static world. In practice, pedestrians, vehic
 
 | Module | Mode | Description |
 |--------|------|-------------|
-| **Module 1 — Voxel-Based** | Autonomous | Geometry-driven pipeline: voxelization → wall/ground filtering → DBSCAN clustering → temporal tracking → adaptive per-voxel scoring |
+| **Module 1 — Voxel-Based** | Autonomous | Geometry-driven pipeline: ground/wall filtering → DBSCAN clustering + tracking → per-voxel evidence (centroid shift, free space, vacated space) → per-object decision → point labels |
 | **Module 2 — Bounding-Box** | Supervised | Consumes 3D bounding boxes from an external detector/tracker via ROS 2 topic and removes all enclosed points |
 
 The two modules are independent and can be used separately or combined: Module 2 acts as a fast first-pass filter for confidently detected objects, while Module 1 handles residual or detector-missed dynamic content.
@@ -29,11 +29,26 @@ The two modules are independent and can be used separately or combined: Module 2
 
 ### Module 1 — Voxel-Based Pipeline ([full details](https://giacomotambe.github.io/FIDO-GLIM/module1_voxel.html))
 
-Each incoming LiDAR frame passes through five sequential stages:
+The decision starts **per voxel** (local evidence of motion), is **aggregated per object** (clusters tracked over time) and goes back **to the points**:
 
-![Voxel-based dynamic object rejection pipeline](docs/assets/voxel_pipeline.png)
+```mermaid
+flowchart LR
+  S[scan] --> R[rejection frame<br/>10k uniform raw points<br/>+ far extras 20–40 m]
+  R --> W[WallFilter<br/>ground · walls · outliers]
+  W --> C[DBSCAN clusters<br/>+ Hungarian tracking]
+  C --> E[voxel evidence<br/>centroid shift vs t−5<br/>free space: range images + world map]
+  E --> D[object decision<br/>+ vacated space]
+  D --> L[point labels → odometry frame]
+  D -. feedback .-> C
+```
 
-**Key design novelty:** a closed feedback loop between cluster-level tracking and voxel-level scoring progressively lowers the detection threshold for persistently dynamic regions, enabling detection of slow-moving objects that fall below any single-frame geometric threshold.
+1. **Pose of the scan** — from the IMU-fused `PoseKalmanFilter`, or, without IMU, extrapolated at constant velocity from the last stamped SLAM poses.
+2. **Rejection frame** — a uniform sample of the raw scan (keeps the sensor's density profile) plus extra far points used only to decide.
+3. **Static structure** — ground segmented every frame (polar grid + RANSAC), walls by vertical RANSAC kept in a persistent registry; structure is never dynamic.
+4. **Clusters and tracks** — DBSCAN on voxels, fragment merge, constant-velocity prediction and Hungarian association.
+5. **Voxel evidence** — centroid shift against 5 frames earlier beyond a range-dependent noise dead zone; points appearing where past scans saw free space (range images at t−6/10/14 and a world free-space map with DUFOMap-like dilation).
+6. **Object decision** — enough dynamic voxels, plausible shape, motion and free-space evidence, or **vacated space** (the track's old position is now seen through). Tracks are confirmed by hysteresis or a leaky evidence accumulator; locks are released when the object stops or turns out to be static structure.
+7. **Point labels** — only inside confirmed objects (feet kept, far ground returns dropped), with a guard against frames corrupted by a pose error; then transferred to GLIM's own points.
 
 ### Module 2 — Bounding-Box Pipeline ([full details](https://giacomotambe.github.io/FIDO-GLIM/module2_bbox.html))
 
@@ -49,7 +64,7 @@ FIDO runs as a **producer–consumer** system decoupled from the GLIM preprocess
 
 ![FIDO producer–consumer architecture](docs/assets/architecture.jpeg)
 
-The ego-motion increment ΔT between consecutive scans is provided by an **error-state Kalman filter** (`PoseKalmanFilter`) that fuses IMU predictions with SLAM pose updates.
+The pose of each scan comes from `PoseKalmanFilter`: an **error-state Kalman filter** that fuses IMU predictions with SLAM pose updates, or, without IMU, a **constant-velocity prediction** from the last stamped SLAM poses to the scan stamp.
 
 ---
 
@@ -75,7 +90,7 @@ git clone https://github.com/giacomotambe/FIDO-GLIM.git
 
 # Build
 cd ~/ros2_ws
-colcon build --symlink-install --packages-select fido_glim
+colcon build --symlink-install
 
 # Source
 source install/setup.bash
@@ -85,91 +100,62 @@ source install/setup.bash
 
 ## Configuration ([full reference](https://giacomotambe.github.io/FIDO-GLIM/parameters.html))
 
-FIDO is configured through JSON files read at startup. The main config files are:
+FIDO is configured through JSON files read at startup:
 
 | File | Controls |
 |------|----------|
-| `config_wall_filter.json` | Voxel resolution, RANSAC parameters, ground segmentation |
-| `config_dynamic_cluster_extractor.json` | DBSCAN, bounding box filters, tracker thresholds |
-| `config_dynamic_object_rejection.json` | Scoring weights, tier multipliers, history buffer |
-| `config_bbox_rejection.json` | Velocity inflation, box margin, max box age |
-| `config_ros.json` | `env_type`: `"INDOOR"` or `"OUTDOOR"` (affects peer-merge distance) |
+| `config_dynamic_object_rejection.json` | Rejection frame, voxel evidence (shift, free space, vacated space), object decision, labelling |
+| `config_dynamic_cluster_extractor.json` | DBSCAN, fragment merge, tracking, confirmation and locks |
+| `config_wall_filter.json` / `config_wall_registry.json` | Voxel resolution, ground segmentation, wall RANSAC and registry |
+| `config_bbox_rejection.json` | Velocity-inflated box zone (Modules 1 and 2), Module 2 box age |
+| `config_ros.json` | `dynamic_rejection_type`: `NONE` · `CLUSTER` · `BBOX` · `COMBINED` |
 
-### Key Parameters
+**Before the first run**
+- set `dynamic_rejection_type` (anything but `NONE` also makes the preprocessor keep the raw scan the rejection needs);
+- `apply_lidar_imu_extrinsic` (both rejection files) is `true` only if `T_lidar_imu` in `config_sensors.json` belongs to your sensor;
+- without IMU, use the CT odometry (`config_odometry_ct.json`).
 
-**Voxelization**
+### Key parameters (shipped defaults)
+
 ```json
-"voxel_resolution": 0.25
+// config_dynamic_object_rejection.json
+"rej_input_points": 10000,              // uniform raw sample used by the rejection
+"hybrid_min_range": 20.0, "hybrid_max_range": 40.0, "hybrid_max_points": 8000,
+"compare_baseline_frames": 5,           // centroid shift against t-5
+"noise_sigma0": 0.045, "noise_sigma_slope": 0.007, "noise_deadzone_k": 3.0,   // re-tune per sensor
+"visibility_min_age": 6, "visibility_max_age": 14, "visibility_age_step": 4,  // past range images
+"visibility_res_deg": 0.5,
+"fs_enabled": true, "fs_res": 0.3, "fs_min_free": 5, "fs_dilate": 1,           // world free-space map
+"vac_enable": true, "vac_gap_frames": 8, "vac_min_disp": 0.6,                  // vacated space
+"cluster_propagation_threshold": 0.45,
+"min_obj_height": 0.2, "max_obj_bottom_hag": 1.5, "max_obj_top_hag": 2.3,
+"min_obj_vis": 0.3,
+"frame_max_dynamic_frac": 0.1           // anomalous-frame guard
+
+// config_dynamic_cluster_extractor.json
+"eps_voxel_factor": 1.5, "cluster_max_range": 70.0,
+"frag_merge_gap": 0.5, "frag_merge_gap_k": 0.02,
+"assoc_gate_base": 0.8, "assoc_gate_per_range": 0.03,
+"min_dynamic_frames": 2,
+"track_evidence_decay": 0.8, "track_evidence_bias": 0.6, "track_evidence_on": 0.5,
+"permanent_dynamic_frames": 8, "permanent_static_frames": 20
 ```
 
-**Wall detection**
-```json
-"ransac_inlier_threshold": 0.07,
-"ransac_confidence": 0.99,
-"max_planes": 8,
-"wall_vertical_angle_deg": 5.0
-```
-
-**Ground segmentation**
-```json
-"floor_polar_r_bin": 0.5,
-"floor_polar_theta_deg": 10.0,
-"floor_polar_slope_threshold": 0.1,
-"floor_polar_seed_min_r": 2.0,
-"floor_polar_seed_max_r": 15.0
-```
-
-**Clustering & tracking**
-```json
-"eps_voxel_factor": 1.5,
-"min_cluster_voxels": 3,
-"peer_merge_distance_indoor": 0.2,
-"peer_merge_distance_outdoor": 2.0,
-"min_dynamic_frames": 3,
-"permanent_dynamic_frames": 10,
-"permanent_static_frames": 15,
-"track_max_missed": 5
-```
-
-**Scoring**
-```json
-"dynamic_score_threshold": 0.1,
-"tier1_threshold_factor": 0.55,
-"memory_threshold_factor": 0.70,
-"unconstrained_threshold_factor": 3.0,
-"w_shift": 1.0,
-"w_mahalanobis": 0.0,
-"w_cluster": 0.07,
-"w_history": 0.3,
-"frame_num_memory": 5,
-"min_shift_m": 0.09,
-"motion_threshold_scale": 0.5,
-"cluster_propagation_threshold": 0.4,
-"cluster_motion_scale": 5.0,
-"num_threads": 4
-```
-
-**Bounding-box rejection**
-```json
-"max_bbox_frames": 5,
-"inflate_margin": 0.0,
-"velocity_inflation_k": 3.0,
-"rear_inflation_k": 0.45,
-"lateral_inflation_k": 0.60,
-"velocity_inflation_min": 0.05,
-"velocity_inflation_max_speed": 5.0
-```
+Every key, its status (active / option / legacy) and its meaning: [configuration reference](https://giacomotambe.github.io/FIDO-GLIM/parameters.html). How to adapt them to a new sensor: [tuning guide](https://giacomotambe.github.io/FIDO-GLIM/tuning.html).
 
 ---
 
 ## ROS 2 Interface
 
+The ROS 2 node lives in [FIDO-GLIM-ROS2](https://github.com/giacomotambe/FIDO-GLIM-ROS2); topic names are set in `config_ros.json`.
+
 ### Subscriptions
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/glim_ros/imu` | `sensor_msgs/Imu` | IMU measurements for ego-motion estimation |
-| `/bounding_boxes` | `vision_msgs/Detection3DArray` (or custom) | External 3D bounding boxes for Module 2 |
+| `/imu/data` (`imu_topic`) | `sensor_msgs/Imu` | IMU measurements for ego-motion estimation |
+| `/velodyne_points` (`points_topic`) | `sensor_msgs/PointCloud2` | LiDAR scans |
+| `/onboard_detector/tracked_dynamic_obstacles` (`bbox_topic`) | detector boxes | External 3D bounding boxes for Module 2 |
 
 ### Publications
 
@@ -195,7 +181,18 @@ FIDO runs entirely on CPU; GLIM uses the GPU for scan matching.
 
 ## Results
 
-Evaluated on indoor and outdoor sequences under static and moving robot conditions, FIDO consistently reduces pose drift and map ghost artifacts compared to an unfiltered GLIM baseline. The combination of Module 1 and Module 2 achieves the best overall performance by exploiting complementary strengths of geometry-driven and detection-driven filtering.
+Point-level moving-object segmentation, labels evaluated on the full scan, with GLIM's own odometry in the loop (commit `30a4e05`, see [Evaluation](https://giacomotambe.github.io/FIDO-GLIM/evaluation.html) for protocol and the comparison with M-detector):
+
+| Dataset | IoU < 20 m | IoU all |
+|---|---|---|
+| DOALS (8 sequences, mean per frame) | 74.8 | 71.7 |
+| HeLiMOS KAIST05, Ouster OS2-128 (test split) | 0.616 | 0.561 |
+| HeLiMOS KAIST05, Velodyne VLP-16 (test split) | 0.211 | 0.184 |
+| SemanticKITTI 07 (frames 0–559) | 0.627 | 0.562 |
+
+On 16-beam sensors recall is still low and there are almost no detections beyond 20 m.
+
+The offline harness `kitti_dynamic_eval` (build with `-DBUILD_DYNAMIC_REJECTION_TESTS=ON`) reproduces these numbers on any sequence in SemanticKITTI layout.
 
 ---
 

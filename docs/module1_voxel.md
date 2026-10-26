@@ -1,104 +1,147 @@
-# Module 1 — Voxel-based pipeline
+# Module 1 — Voxel pipeline
 
 *Autonomous — needs no external detector.*
 
-Every incoming scan passes through five sequential stages inside `AsyncDynamicObjectRejection::run()`. The novelty is stage 5's **closed feedback loop**: cluster-level tracking (stage 3) progressively lowers the per-voxel threshold for regions with a persistent dynamic history (stage 4), which lets slow-moving objects — below any single-frame geometric threshold — accumulate enough evidence across frames to be caught.
+Module 1 splits every scan into a **static** frame (sent to GLIM odometry) and a **dynamic** frame (held back). The decision is built in three layers:
 
-![Voxel-based dynamic object rejection pipeline: raw point cloud and ego-motion go through pre-processing (voxelization, wall labeling, ground filtering), clustering (DBSCAN, OBB fitting, tracking), scoring (per-voxel score against the previous map, three-tier adaptive threshold), propagation (neighbor expansion, cluster-level consistency), and output (static/dynamic point routing, history update) — with persistent state (history buffer, wall OBB registry, cluster tracker) carried across frames.](assets/voxel_pipeline.png)
+1. **per voxel** — local evidence of motion (centroid shift, free space, vacated space);
+2. **per object** — voxels are grouped into clusters, clusters are tracked over time and confirmed dynamic only when the evidence holds;
+3. **per point** — the object decision is written back to the points, and from the rejection's own sample onto the odometry frame.
 
-## 1 · Voxelization — `DynamicVoxelMapCPU`
-
-`DynamicVoxelMapCPU` (`dynamic_voxelmap_cpu.hpp`) extends gtsam_points' `GaussianVoxelMap` and `IncrementalVoxelMap` with a richer per-voxel payload, `DynamicGaussianVoxel`:
-
-| Field | Purpose |
-|---|---|
-| `is_wall` / `is_ground` / `is_outlier` / `is_dynamic` | Classification flags set by later stages |
-| `voxel_points`, `voxel_intensities`, `voxel_times` | Raw points retained for splitting the frame after classification |
-| `dynamic_score` | Running score written by stage 4 and read by stage 5 |
-
-Resolution is a single knob, `voxel_resolution` in `config_wall_filter.json` (default **0.25 m**) — every downstream DBSCAN `eps` and neighbor search derives from it, so it's the one parameter that reshapes the whole pipeline's spatial granularity.
-
-## 2 · Static pre-filtering — `WallFilter`
-
-`WallFilter::filter()` voxelizes the frame once (no second pass downstream) and runs iterative RANSAC over voxel centroids, up to `max_planes` planes, classifying each fitted plane by its normal angle:
-
-- **Wall** — normal within `wall_vertical_angle_deg` of horizontal.
-- **Floor/ceiling** — normal within `floor_ceiling_angle_deg` of vertical.
-
-For each wall plane it extracts the largest spatially-contiguous inlier cluster, builds an oriented bounding box (rejecting non-compact shapes via `wall_bbox_max_aspect_ratio`), and merges it into a **`WallBBoxRegistry`** that persists across frames — new observations are matched to existing boxes by 3D OBB IoU (Separating Axis Theorem) and SLERP-blended in, or added as a new wall if the overlap is below `overlap_threshold`. Registry entries not re-observed for `max_missed_frames` frames expire.
-
-Ground is handled separately when `floor_polar_enabled` is true: a **polar-grid segmentation** (range bins of `floor_polar_r_bin`, angular bins of `floor_polar_theta_deg`) picks the `floor_polar_k_lowest` lowest points per cell between `floor_polar_seed_min_r`/`_seed_max_r`, checks local flatness and slope, then a constrained RANSAC (`ransac_floor_plane`) refits a single horizontal plane over the accepted seeds. Voxels beyond every wall's half-space, or beyond a radial fallback (`max_detection_radius`), are flagged `is_outlier`.
-
-Wall and ground voxels are **unconditionally kept static** — they never enter stage 4's scoring loop, which is what keeps FIDO cheap: only the minority of voxels that are neither structure nor obvious outliers get scored.
-
-| Key parameters | `config_wall_filter.json` | `config_wall_registry.json` |
-|---|---|---|
-| RANSAC | `ransac_inlier_threshold` 0.07 m · `ransac_confidence` 0.99 · `ransac_max_iterations` 100 · `ransac_min_inliers` 30 | — |
-| Ground | `floor_polar_flatness_threshold` 0.05 · `floor_polar_max_ground_height` 0.3 m · `floor_polar_max_vertical_spread` 0.30 m | — |
-| Registry merge | — | `overlap_threshold` 0.3 · `merge_weight` 0.3 · `min_normal_dot` 0.9 |
-| Registry expiry | — | `enable_expiry` true · `max_missed_frames` 5 · `max_duplicate_center_distance` 2.0 m |
-
-## 3 · Cluster extraction & tracking — `DynamicClusterExtractor`
-
-Runs on the wall/ground-filtered voxelmap, in order:
-
-1. **DBSCAN** over active voxel centroids (`cluster_voxels`) — `eps = eps_voxel_factor × voxel_resolution`, `min_pts` core-point threshold, bounded by `knn_max_neighbors`.
-2. **Bounding boxes** per cluster (`compute_bounding_boxes`), discarding clusters under `min_cluster_voxels` or `min_points_for_bbox`, and boxes outside the `bbox_min/max_extent` and `bbox_min/max_volume` windows.
-3. **NMS** at `cluster_iou_threshold`, then **peer merge** (`merge_nearby_clusters`) — iteratively fuses boxes within `peer_merge_distance`, converging on merge chains. The distance is picked by `env_type` in `config_ros.json`: `peer_merge_distance_indoor` or `_outdoor`.
-4. **Tracking** (`update_tracks`) — associates boxes to existing `Track`s by center distance (`track_match_distance`) and IoU (`track_match_iou`); unmatched tracks survive up to `track_max_missed` frames; matched tracks get an EMA-smoothed velocity.
-
-Each `Track` carries a small state machine that is FIDO's actual hysteresis mechanism:
-
-| Field | Role |
-|---|---|
-| `dynamic_frames` / `static_frames` | Consecutive-frame counters updated by `update_dynamic_feedback()` from stage 4's output |
-| `PermanentState::NONE → DYNAMIC → STATIC` | Locked once `dynamic_frames ≥ permanent_dynamic_frames` or `static_frames ≥ permanent_static_frames` (`0` disables locking). A locked track's boxes stop being re-evaluated by stage 5. |
-| `bbox_history` | Last `track_bbox_history_size` boxes, re-expressed in the current sensor frame each call — feeds `get_dynamic_track_history()` |
-
-A box is considered "confirmed dynamic" once `PermanentState::DYNAMIC` *or* `dynamic_frames ≥ min_dynamic_frames` — with the shipped config, just **2** consecutive confirmed-dynamic frames before stage 4 starts treating the whole cluster as reliable evidence (Tier 1, below).
-
-| Parameter | Value | Parameter | Value |
-|---|---|---|---|
-| `eps_voxel_factor` | 1.5 | `track_match_distance` | 2.0 m |
-| `min_cluster_voxels` | 3 | `track_match_iou` | 0.05 |
-| `cluster_iou_threshold` | 0.1 | `track_max_missed` | 5 frames |
-| `peer_merge_distance_indoor` | 0.01 m | `min_dynamic_frames` | 2 |
-| `peer_merge_distance_outdoor` | 2.8 m | `permanent_dynamic_frames` | 8 |
-| `bbox_min_extent` / `_max_extent` | 0.1 m / 4.0 m | `permanent_static_frames` | 20 |
-
-## 4 · Dynamic scoring — `DynamicObjectRejectionCPU`
-
-`score_voxels()` compares the current voxelmap against the previous frame's, accumulating a per-voxel `dynamic_score`:
-
-```cpp
-score  = w_shift        * max(0, centroid_shift − min_shift_m)
-       + w_mahalanobis  * mahalanobis_distance          // 0 by default
-       + w_cluster       * (+1 inside dynamic cluster, −0.5 inside static/none)
-       + w_velocity      * (cluster_ema_speed − velocity_static_threshold)
-       − w_history        * static_ratio_over(frame_num_memory)
-       + w_history_dynamic* dynamic_frames_in_history
-       − w_distance       * ‖voxel_position‖             // suppresses far-range noise
+```mermaid
+flowchart LR
+  S[scan] --> P[pose of the scan<br/>PoseKalmanFilter]
+  S --> R[rejection frame<br/>10k raw points + far extras]
+  R --> W[WallFilter<br/>ground, walls, outliers]
+  W --> C[clusters + tracks]
+  C --> E[voxel evidence<br/>shift · range images · free-space map]
+  E --> D[object decision<br/>+ vacated space]
+  D --> L[point labels]
+  L --> T[label transfer<br/>to the odometry frame]
+  T --> O[static → GLIM<br/>dynamic → diagnostics]
+  D --> F[tracker feedback]
+  F -.-> C
 ```
 
-Ego-motion feeds a **motion-scale factor**: `motion_scale_` combines `motion_threshold_scale × ‖Δtranslation‖` and `rotation_threshold_scale × ‖Δrotation‖` from `PoseKalmanFilter`'s delta pose (see [Architecture](architecture.md#ego-motion)), widening the threshold while the platform moves fast so ego-motion residual doesn't get flagged as a moving object.
+Everything below runs inside `AsyncDynamicObjectRejection::run()`, in this order. Defaults are the values shipped in `config/`.
 
-The score is compared against an **effective threshold**, not the raw `dynamic_score_threshold` — `base_threshold = dynamic_score_threshold × motion_scale_` is then multiplied by one of three tier factors depending on how much corroborating evidence the voxel has:
+## 0 · Pose of the scan — `PoseKalmanFilter`
 
-| Tier | Condition | Factor (shipped) | Effect |
-|---|---|---|---|
-| <span class="tier1">Tier 1</span> | Voxel inside a **confirmed** dynamic cluster bbox | `tier1_threshold_factor` = 0.55 | Lowest bar — cluster-level tracking already vouches for this region |
-| <span class="tier2">Tier 2</span> | Dynamic last frame, no cluster bbox this frame | `memory_threshold_factor` = 0.70 | Short-memory carry-over for a track that briefly lost cluster support |
-| <span class="tier3">Tier 3</span> | No cluster, no dynamic history | `unconstrained_threshold_factor` = 3.0 | Highest bar — isolated evidence must be strong to avoid false positives |
+Every stage reads the pose of the current scan from `PoseKalmanFilter::getFramePose()` (times `T_imu_lidar` when `apply_lidar_imu_extrinsic` is true).
 
-!!! tip "Why the tiers matter"
-    Tier 1's factor must stay above `w_cluster / dynamic_score_threshold` — otherwise every voxel inside any tracked cluster would be flagged unconditionally regardless of its own shift, defeating the per-voxel check entirely (noted directly in `DynamicObjectRejectionParamsCPU`'s doc comment).
+- **With IMU** — the filter integrates the IMU between SLAM updates; the pose is the IMU-propagated one.
+- **Without IMU** — the filter keeps the last two *stamped* SLAM poses and extrapolates them at constant velocity to the scan stamp (`set_frame_stamp`), up to 1 s.
 
-## 5 · Label propagation
+!!! warning "The pose of the current scan must be predicted"
+    The rejection of scan *t* runs before odometry has processed *t*. If the pose is simply the last odometry pose (one scan behind, no prediction), static structure appears to move: on HeLiMOS IoU < 20 m drops from 72.8 to 62.4. Use an IMU, or stamped updates so the constant-velocity prediction kicks in.
 
-Two passes tighten the classification before points are split, then feedback closes the loop:
+## 1 · Rejection frame — `make_rejection_frame`
 
-1. **`propagate_to_neighbors()`** — adds `w_neighbor` to the score of each of the 26 voxel-grid neighbors of a confirmed-dynamic voxel and re-applies the threshold, so a moving object's silhouette doesn't get eroded to its highest-shift voxels only.
-2. **`propagate_to_clusters()`** — if the dynamic-voxel ratio inside a cluster bbox crosses `cluster_propagation_threshold` (itself scaled by motion via `cluster_motion_scale` / `cluster_rotation_scale`), the whole cluster is marked dynamic. For voxels outside every current bbox, a separate check against `historical_bboxes` — past frames' boxes of already-confirmed tracks, via `contains()` / `contains_inflated()` — catches object parts a slightly-stale detection missed.
-3. **`update_dynamic_feedback()`** (back in `DynamicClusterExtractor`) — increments each track's `dynamic_frames` when its bbox was confirmed dynamic this frame, resets to 0 otherwise. This is what makes stage 3's hysteresis and stage 4's Tier 1 bar mutually reinforcing frame over frame.
+The rejection does not work on the odometry frame (which GLIM downsamples with a random grid). It builds its own input from the raw scan kept by the preprocessor:
 
-Finally, `collect_points()` walks every voxel and appends its raw points to the static or dynamic bucket, and `build_frame()` reassembles a `PreprocessedFrame` for each — recomputing k-NN neighbor indices when the source frame requested them.
+| Step | Keys | Default |
+|---|---|---|
+| Uniform random sample of the raw scan (1–100 m), seeded by the stamp | `rej_input_points` | 10000 |
+| Extra raw points far away, used only to decide (marked with time = NaN) | `hybrid_enabled`, `hybrid_min_range`, `hybrid_max_range`, `hybrid_max_points` | on, 20–40 m, 8000 |
+| Past range images built from the raw scan | `vis_raw`, `vis_raw_max_range`, `vis_raw_max_points` | on, 70 m, 60000 |
+
+A uniform sample keeps the sensor's density profile, which the evidence below depends on. At the end the labels are transferred back to the odometry frame (step 8), so GLIM still receives exactly its own points.
+
+!!! note
+    The preprocessor attaches the raw scan only when `dynamic_rejection_type` in `config_ros.json` is not `"NONE"` and one of `hybrid_enabled`, `vis_raw`, `fs_raw` is on. Without it, the three steps above silently fall back to the odometry frame.
+
+## 2 · Static structure — `WallFilter`
+
+`WallFilter::filter()` voxelizes the rejection frame once (`voxel_resolution`, 0.25 m, Gaussian statistics per voxel) and flags structure, which is never dynamic:
+
+1. **Ground, every frame.** Polar grid over voxel centroids (10° sectors × 0.5 m bins); per sector a seed cell between 2 and 15 m, propagated inwards and outwards while the slope stays below `floor_polar_slope_threshold` and the height below `floor_polar_max_ground_height`. A RANSAC plane is then fitted to the ground voxels; its box defines `is_ground`.
+2. **Walls.** Vertical 2-point RANSAC on the non-ground voxels (`wall_vertical_ransac`), up to `max_planes` planes. Wall planes are turned into oriented boxes and merged into the **`WallBBoxRegistry`**, which persists across frames (matched by normal, centre distance and OBB IoU; union of the boxes, thickness clamped to `max_wall_thickness`). Voxels inside a registry box get `is_wall`.
+3. **Outliers.** Voxels behind a registry wall, seen from the sensor, get `is_outlier`.
+
+Height above ground (HAG) for the later stages is computed separately: the lowest voxel centroid in the 3×3 block of `ground_cell_m` (2 m) cells around each voxel.
+
+## 3 · Clusters and tracks — `DynamicClusterExtractor`
+
+1. **DBSCAN on voxels** — non-structural voxels within `cluster_max_range` (70 m) and below `cluster_max_height` (4 m) above ground; neighbours found with a voxel hash; `eps = eps_voxel_factor × voxel_resolution` (0.375 m). `eps_range_k` optionally widens eps along *z* far from the sensor, for sparse rings (VLP-16 ≈ 0.04).
+2. **Boxes** — one AABB per cluster, filtered by size (`bbox_min_extent` 0.1 m – `bbox_max_extent` 4 m) and volume.
+3. **NMS**, then **fragment merge** — two boxes merge if their gap is < `frag_merge_gap + frag_merge_gap_k · r` (0.5 m + 0.02·r) and the union stays object-sized (`frag_max_len/wid/hgt` 6 × 3 × 4 m). The merged box remembers its **parts**, so points are later labelled only inside the parts.
+4. **Tracking** — tracks are predicted at constant velocity; boxes are associated by **Hungarian assignment** on centroid distance, with gate `assoc_gate_base + assoc_gate_per_range · r + assoc_gate_per_missed · missed` (0.8 + 0.03·r + 0.3·missed), solved per connected component. Unmatched tracks coast for up to `track_max_missed` (5) frames.
+
+A track is **confirmed dynamic** when any of these holds:
+
+| Rule | Keys | Default |
+|---|---|---|
+| Consecutive dynamic frames (hysteresis) | `min_dynamic_frames` | 2 |
+| Leaky evidence accumulator: `e ← decay·e + (evidence − bias)`, confirmed when `e ≥ on` | `track_evidence_decay`, `_bias`, `_on`, `_max` | 0.8, 0.6, 0.5, 2.0 |
+| Locked state after N dynamic frames | `permanent_dynamic_frames` | 8 |
+
+The accumulator confirms small or far objects that never pass the single-frame test, while the bias keeps the noise of static clusters out.
+
+**Locks and their release.** After `permanent_dynamic_frames` (8) dynamic frames a track is locked dynamic; after `permanent_static_frames` (20) static frames it is locked static. Locks are not final:
+
+- a static lock is released after `permanent_unlock_frames` (2) frames of strong motion (dynamic ratio > `unlock_ratio_factor` × threshold, or vacated space);
+- a dynamic lock is released after `permanent_release_no_motion_frames` (3) matched frames without own motion — e.g. when the track has been handed over to a cabinet or a wall;
+- a locked-dynamic cluster is not removed in a frame if it lies for ≥ `locked_struct_frac` (70%) on static structure of the free-space map (cells occupied for `struct_min_age` frames and never seen free since), or if its box is taller than `locked_max_height` (2.5 m).
+
+## 4 · Voxel evidence — `DynamicObjectRejectionCPU`
+
+The module keeps 14 frames of history (voxel maps, poses, range images). For every non-structural voxel above the ground band (`ground_band_m`, 0.25 m):
+
+**a. Centroid shift against t−5** (`compare_baseline_frames`). The past voxel is found after ego-motion compensation, and the shift beyond a **noise dead zone** is scored:
+
+```text
+σ(r)  = min(noise_sigma_max, noise_sigma0 + noise_sigma_slope · r)
+        + pose_err_trans_k · ‖t_baseline‖ + pose_err_rot_k · θ_baseline · r
+score = w_shift · max(0, |shift| − noise_deadzone_k · σ(r)) / voxel_resolution
+```
+
+Defaults: σ0 0.045 m, slope 0.007, max 0.10 m, k = 3, `w_shift` 1.2. The σ model is sensor-specific and is the first thing to re-tune on a new LiDAR.
+
+**b. Free space in past range images.** Each point is projected into the range images of the scans at t−6, t−10, t−14 (`visibility_min_age`, `_max_age`, `_age_step`; 0.5° cells, 3×3 minimum filter). If the sensor used to see farther along that ray (by more than `max(visibility_abs_thr, visibility_rel_thr · d)` = max(0.3 m, 3%)), the point now occupies space that was free. A strict majority of the scans that see the cell decides. The voxel's `vis` is the fraction of its points that appeared in free space.
+
+**c. Free-space world map** (`fs_enabled`). A sharded hash grid in the world frame (`fs_res` 0.3 m) counts, frame after frame, how often each cell was crossed by a ray (free) or hit (occupied). A point is evidence of motion if its cell was seen free ≥ `fs_min_free` (5) times and ≥ `fs_free_ratio` (5) × occupied, **and** all 26 neighbours are free too (`fs_dilate`, a DUFOMap-like dilation — without it poles and edges are "emptied" by rays). It gives long memory without storing scans. `vis` becomes the maximum of (b) and (c). Rays are integrated in parallel, one every `fs_ray_stride` (4) points, up to `fs_max_range` (60 m).
+
+**Score and thresholds.** `score += w_visibility · vis` (0.5); `score −= w_history · (fraction of the last frames where the voxel was static)` (0.3). The voxel is dynamic if the score passes a three-tier threshold on `dynamic_score_threshold` (0.08):
+
+| Condition | Factor | Threshold |
+|---|---|---|
+| Inside a dynamic box (or its velocity-inflated zone) | `tier1_threshold_factor` 0.55 | 0.044 |
+| Dynamic at t−1 | `memory_threshold_factor` 0.70 | 0.056 |
+| Isolated | `unconstrained_threshold_factor` 3.0 | 0.24 |
+
+A voxel with no match in the past is decided by free space alone. Dynamic voxels then add `w_neighbor` (0.2) to their 26 neighbours.
+
+## 5 · Object decision — `propagate_to_clusters`
+
+For each box: **ratio** = dynamic voxels / voxels, **vis** = mean free-space fraction. The cluster is dynamic in this frame if
+
+- ratio > `cluster_propagation_threshold` (0.45), **and**
+- shape is plausible: height ≥ `min_obj_height` (0.2 m), lowest point ≤ `max_obj_bottom_hag` (1.5 m) and highest ≤ `max_obj_top_hag` (2.3 m) above ground, **and**
+- it moves: track speed ≥ `min_obj_speed` (0.1 m/s) or vis ≥ `moving_vis_alt` (0.3), **and**
+- it was seen in free space: vis ≥ `min_obj_vis` (0.3);
+
+**or** it passes the **vacated-space** test (`vac_enable`): the points the track occupied ≥ `vac_gap_frames` (8) frames ago, after a displacement ≥ `vac_min_disp` (0.6 m), are now seen through by the current scan (≥ 80% of the visible ones, ≥ 4 points), with a constant-velocity check on the midpoint. This catches objects whose own points carry little evidence.
+
+This per-frame verdict is fed back to the tracker (step 3). A box is **removed** in the current frame only if its track is already confirmed, or by **fast confirmation** (ratio > 2 × threshold and vis ≥ 0.2).
+
+Optional, off by default: **delayed decision** (`fut_delay` > 0) — wait D frames and also test the points against the *future* range images. On HeLiMOS `fut_delay: 10` raised IoU < 20 m by about 2 points, at the cost of 1 s of latency (offline mapping only).
+
+## 6 · Point labels
+
+- Voxels inside the parts of a removed box → dynamic. A foot rule keeps near-ground voxels (HAG ≥ `foot_min_hag`, 0.10 m) under a tall confirmed box dynamic.
+- Voxels in the velocity-inflated zone of a dynamic box (`config_bbox_rejection.json`) or in recent boxes of confirmed tracks → dynamic **only with their own evidence** (`inflated_requires_evidence`).
+- Beyond `point_ground_cut_min_range` (10 m), points less than `point_ground_cut` (0.2 m) above ground stay static: they are ground returns inside the box.
+- Everything else is static: at default the output is decided per object, never by isolated voxels.
+- **Anomalous-frame guard**: if more than `frame_max_dynamic_frac` (10%) of the points come out dynamic — typically a pose error — only the bases of confirmed objects are kept dynamic.
+
+## 7 · Memory update
+
+The voxel map, pose and range image of the frame enter the history (14 frames); the scan is integrated into the free-space map (after the query, so a scan never votes on itself).
+
+## 8 · Label transfer — `transfer_labels`
+
+The labels found on the rejection frame are copied onto the odometry frame: each odometry point takes the label of its nearest labelled point within `label_transfer_radius` (0.5 m), static on ties and when nothing is within reach. The static frame reuses the preprocessing neighbours wherever possible, so GLIM's covariance estimation is not repeated.
+
+## What changed from the first version
+
+The first version scored each voxel against the previous frame only (`w_shift`, `w_cluster`, `w_distance`, ego-motion-scaled thresholds) and propagated a cluster as soon as its dynamic ratio crossed a threshold. The current pipeline adds the noise dead zone, free space (range images and world map), vacated space, Hungarian tracking with evidence accumulation and lock release, the separate uniform rejection frame and label transfer, and the pose prediction without IMU. The legacy keys are still read but set to 0 — see [Configuration reference](parameters.md#legacy-and-experimental-keys).
